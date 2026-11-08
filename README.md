@@ -1,6 +1,6 @@
 # dsh-cmdk — ⌘K 命令面板
 
-当前版本 **0.3.1**：会话 / 工作区 / 插件 / 动作 / 外观一个入口，插件可扩展。
+当前版本 **0.3.2**：会话 / 工作区 / 插件 / 动作 / 外观一个入口，插件可扩展。
 
 一个快捷键跳到任何东西：会话、工作区、常用动作，还能对选中的会话直接做事。
 装完即用，无配置，零依赖。
@@ -13,10 +13,10 @@
 
 | 输入 | 结果 |
 | --- | --- |
-| `⌘K` / `Ctrl+K` | 打开 / 关闭面板（侧栏底部也有「⌘K 搜索」按钮） |
-| 输入会话标题 | 模糊匹配全部会话（前缀 > 子串 > 拼音首字母 > 子序列），回车直达 |
+| `⌘K` / `Ctrl+K` | 打开 / 关闭面板（侧栏底部也有同款按钮） |
+| 输入会话标题 | 浏览器内即时模糊匹配全部会话（前缀 > 子串 > 拼音首字母 > 子序列），回车直达 |
 | 输入中文首字母 | `cj` → 「插件…」，`cjgc` → 「插件广场」 |
-| 输入消息内容 | 宿主扫描最近 12 个会话的日志文本，带上下文片段 |
+| 输入消息内容 | 标题先出结果；宿主扫描最近 12 个会话的日志文本，命中后带上下文片段补进来 |
 | 输入工作区名 | 直接切换工作区 |
 | `深色` / `浅色` / `跟随系统` | 换主题 |
 | `中文` / `English` | 换界面语言 |
@@ -63,15 +63,19 @@ window.__DSH_CMDK__?.unregister('my-plugin.open-docs');
 ## 记忆
 
 用过的动作会记在 `localStorage["dsh-cmdk/recent"]`（次数 + 时间，最多 60 条），
-下次空查询时按使用频率排在最上面。纯本地，不上传。
+下次空查询时按 frecency（次数 × 7 天半衰期的时间衰减）排在最上面。纯本地，不上传。
 
 ## 设计取舍
 
 - **跳转与动作走公开 Client 服务**：切会话、Fork、归档、重命名、换主题、换语言都用
   `uiWorkspace` / `sessions` / `theme` / `locale`，不碰内部模块。
-- **列表数据走宿主**：浏览器侧拿不到"全部历史会话"和工作区清单，所以宿主读
+- **列表数据走宿主，过滤走本地**：浏览器侧拿不到"全部历史会话"和工作区清单，所以宿主读
   `sessionQuery.listSessions()` + `readTitleSnapshots()`（标题）与
-  `~/.dsh/storages/workspace.json`（工作区、已归档会话），客户端只做展示。
+  `~/.dsh/storages/workspace.json`（工作区、已归档会话）；宿主一次下发完整目录，
+  客户端在本地做模糊 + 拼音过滤，输入不等网络，正文命中回来后再合并。
+- **导出复用宿主原生实现**：走同源的 `/api/session.markdown?sessionId=`，直接拿到
+  DSH 自带 `formatSessionMarkdown` 的结果（工具调用、图片附件、折叠段齐全），
+  不再自己解压 `zstd`、也不再依赖系统里有没有 `zstd` 命令。
 - **内容搜索不依赖 SQLite 索引**：用 `filterEvents({kind:'text'})` 扫正文——实测有些
   机器上原生「搜索会话」本身就是空的（全文索引没建起来），照抄索引会一起空。
   代价是只扫最近 12 个会话，且只跳到会话顶部而不是那一条消息（API 不返回消息序号）。
@@ -88,9 +92,8 @@ window.__DSH_CMDK__?.unregister('my-plugin.open-docs');
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
 | GET | `/cmdk/info` | home / profile / platform |
-| GET | `/cmdk/sessions?q=&limit=` | 会话目录 + 标题匹配 + 正文命中片段 |
+| GET | `/cmdk/sessions?q=&limit=` | 完整会话目录 + 正文命中片段（标题匹配在客户端做） |
 | GET | `/cmdk/workspaces` | 工作区清单 + 已归档会话 ID |
-| GET | `/cmdk/export?id=` | 把一段会话渲染成 Markdown |
 | GET | `/cmdk/plugins` | 已安装插件（名称 / 版本 / 启用状态 / 目录） |
 | POST | `/cmdk/plugin` | `{ name, enabled }` 启用或禁用某个插件 |
 | POST | `/cmdk/open-profile` | 在访达/资源管理器打开目录（可选 `{path}`） |
@@ -110,7 +113,8 @@ dsh plugin add dsh-cmdk
 ```
 package.json        # dsh.bundle.patch + dsh.client（platform web, immediately）
 cordis.patch.yml    # insert: dsh-cmdk
-index.js           # Host：/cmdk/{info,sessions,workspaces,plugins,plugin,export,open-profile}
+CHANGELOG.md
+index.js           # Host：/cmdk/{info,sessions,workspaces,plugins,plugin,open-profile}
 client.js           # Client：shell.overlay 面板 + sidebar.footer.action 按钮
 locale/zh.json      # meta.title / meta.description
 locale/en.json

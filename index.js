@@ -6,7 +6,7 @@
  * sandbox cannot reach:
  *
  *   GET  /cmdk/info           → where this profile lives (home + profile dir)
- *   GET  /cmdk/sessions?q=    → session titles + message-content hits
+ *   GET  /cmdk/sessions?q=    → full session catalogue + message-content hits
  *   POST /cmdk/open-profile   → reveal the profile directory in Finder/Explorer
  *   GET  /cmdk/plugins        → installed bundles (name, version, enabled, dir)
  *   POST /cmdk/plugin         → enable/disable one bundle via pluginManager
@@ -170,24 +170,6 @@ async function sessionCatalog(ctx) {
   return items;
 }
 
-/** Title hits from the warm catalogue, strongest first (prefix > substring). */
-function matchTitles(items, text) {
-  const lower = text.toLowerCase();
-  const scored = [];
-  for (const item of items) {
-    if (!item.title) continue;
-    const title = item.title.toLowerCase();
-    let score = -1;
-    if (title === lower) score = 100;
-    else if (title.startsWith(lower)) score = 80;
-    else if (title.includes(lower)) score = 60;
-    else if (item.cwd && item.cwd.toLowerCase().includes(lower)) score = 20;
-    if (score > 0) scored.push({ item, score });
-  }
-  scored.sort((a, b) => b.score - a.score);
-  return scored.map((entry) => entry.item);
-}
-
 /**
  * Content hits. The SQLite full-text index can be empty in the wild (the
  * native session search reports "no matches" on such machines), so this walks
@@ -202,7 +184,7 @@ async function matchContent(ctx, text, limit) {
   const cached = contentCache.get(text);
   if (cached && Date.now() - cached.at < CONTENT_TTL) return cached.items.slice(0, limit);
   const catalog = await sessionCatalog(ctx);
-  const scan = catalog.filter((item) => item.title).slice(0, CONTENT_SCAN_SIZE);
+  const scan = catalog.slice(0, CONTENT_SCAN_SIZE);
 
   const hits = [];
   for (const item of scan) {
@@ -240,11 +222,6 @@ function snippetAround(text, needle) {
 }
 
 
-// ---------------------------------------------------------------------------
-// transcript export: the session log is a multi-frame zstd file, so it is
-// decompressed through the zstd CLI (Node's zstd only reads the first frame).
-// ---------------------------------------------------------------------------
-
 function workspaceStorePath() {
   return path.join(dshHome(), 'storages', 'workspace.json');
 }
@@ -275,71 +252,6 @@ function readWorkspaces() {
     items,
     archived: Array.isArray(global.archivedSessionIds) ? global.archivedSessionIds.slice() : [],
   };
-}
-
-function sessionDirOf(sessionId) {
-  const root = path.join(dshHome(), 'sessions');
-  let workspaces;
-  try {
-    workspaces = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-  const bare = sessionId.startsWith('session-') ? sessionId.slice('session-'.length) : sessionId;
-  const wanted = `session-${bare}`;
-  for (const workspace of workspaces) {
-    if (!workspace.isDirectory()) continue;
-    const candidate = path.join(root, workspace.name, wanted);
-    if (fs.existsSync(path.join(candidate, 'session.v4.jsonl.zstd'))) return candidate;
-  }
-  return null;
-}
-
-function run(file, args) {
-  return new Promise((resolve) => {
-    execFile(file, args, { maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
-      resolve({ ok: !error, stdout: stdout || '', stderr: stderr || (error && error.message) || '' });
-    });
-  });
-}
-
-function textOf(content) {
-  if (!Array.isArray(content)) return '';
-  const parts = [];
-  for (const block of content) {
-    if (block && block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
-  }
-  return parts.join('\n').trim();
-}
-
-function renderMarkdown(events, fallbackTitle) {
-  let title = fallbackTitle || '会话导出';
-  const lines = [];
-  for (const event of events) {
-    if (!event || typeof event !== 'object') continue;
-    if (event.type === 'session/title' && event.data && typeof event.data.title === 'string') {
-      title = event.data.title;
-    }
-  }
-  lines.push(`# ${title}`, '');
-  let turns = 0;
-  for (const event of events) {
-    if (!event || typeof event !== 'object') continue;
-    const data = event.data || {};
-    if (event.type === 'user/message') {
-      if (!data.source || data.source.kind !== 'user') continue;
-      const text = textOf(data.content || (data.message && data.message.content));
-      if (!text) continue;
-      turns += 1;
-      lines.push(`## 你`, '', text, '');
-    } else if (event.type === 'assistant/message') {
-      const text = textOf(data.content || (data.message && data.message.content));
-      if (!text) continue;
-      lines.push(`## 助手`, '', text, '');
-    }
-  }
-  lines.push('---', `共 ${turns} 轮对话`);
-  return { title, markdown: lines.join('\n'), turns };
 }
 
 export function apply(ctx, config) {
@@ -388,24 +300,13 @@ export function apply(ctx, config) {
         try {
           const catalog = await sessionCatalog(ctx);
           if (!text) {
-            const titled = catalog.filter((item) => item.title).slice(0, limit);
-            sendJson(res, 200, { ok: true, items: titled, total: catalog.length });
+            sendJson(res, 200, { ok: true, items: catalog, hits: [], total: catalog.length });
             return;
           }
-          const merged = [];
-          const seen = new Set();
-          for (const item of matchTitles(catalog, text).slice(0, limit)) {
-            if (seen.has(item.sessionId)) continue;
-            seen.add(item.sessionId);
-            merged.push(item);
-          }
-          for (const item of await matchContent(ctx, text, limit)) {
-            if (seen.has(item.sessionId)) continue;
-            seen.add(item.sessionId);
-            merged.push(item);
-            if (merged.length >= limit) break;
-          }
-          sendJson(res, 200, { ok: true, items: merged, total: catalog.length });
+          // The client filters titles locally (fuzzy + pinyin); the Host only
+          // contributes the expensive part: message-content hits.
+          const hits = await matchContent(ctx, text, limit);
+          sendJson(res, 200, { ok: true, items: catalog, hits, total: catalog.length });
         } catch (error) {
           sendJson(res, 500, { ok: false, error: String((error && error.message) || error) });
         }
@@ -522,60 +423,6 @@ export function apply(ctx, config) {
             changed: result.changed,
             application: result.application,
             error: result.error ? result.error.code || 'failed' : undefined,
-          });
-        } catch (error) {
-          sendJson(res, 500, { ok: false, error: String((error && error.message) || error) });
-        }
-      },
-    }),
-  );
-
-  disposers.push(
-    server.register({
-      kind: 'exact',
-      path: ROUTE + '/export',
-      handler: async (req, res) => {
-        if (refused(ctx, req, res)) return;
-        let url;
-        try {
-          url = new URL(req.url || ROUTE, 'http://localhost');
-        } catch {
-          sendJson(res, 400, { ok: false, error: 'bad url' });
-          return;
-        }
-        const sessionId = (url.searchParams.get('id') || '').trim();
-        if (!/^[\w-]{6,80}$/.test(sessionId)) {
-          sendJson(res, 400, { ok: false, error: 'bad session id' });
-          return;
-        }
-        try {
-          const dir = sessionDirOf(sessionId);
-          if (!dir) {
-            sendJson(res, 404, { ok: false, error: 'session log not found' });
-            return;
-          }
-          const zstd = await run('zstd', ['-d', '-c', path.join(dir, 'session.v4.jsonl.zstd')]);
-          if (!zstd.ok) {
-            sendJson(res, 500, { ok: false, error: 'zstd failed: ' + zstd.stderr.slice(0, 200) });
-            return;
-          }
-          const events = [];
-          for (const line of zstd.stdout.split('\n')) {
-            const text = line.trim();
-            if (!text) continue;
-            try {
-              events.push(JSON.parse(text));
-            } catch {
-              /* skip a broken line rather than losing the export */
-            }
-          }
-          const rendered = renderMarkdown(events, sessionId);
-          sendJson(res, 200, {
-            ok: true,
-            title: rendered.title,
-            turns: rendered.turns,
-            filename: rendered.title.replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80) + '.md',
-            markdown: rendered.markdown,
           });
         } catch (error) {
           sendJson(res, 500, { ok: false, error: String((error && error.message) || error) });

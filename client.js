@@ -3,8 +3,9 @@
  *
  * One overlay (shell.overlay) plus a small sidebar footer button. Navigation,
  * renaming, archiving, forking and theming all go through public Client
- * services; only the things a browser cannot do (reveal a directory, export a
- * transcript) come from the tiny Host route.
+ * services; only the things a browser cannot do (reveal a directory) come
+ * from the tiny Host route. Transcript export uses the native
+ * /api/session.markdown route.
  */
 window.__ModuleLoader__.load({
   id: 'dsh-cmdk',
@@ -21,6 +22,9 @@ window.__ModuleLoader__.load({
     var API = '/cmdk';
     var RECENT_KEY = 'dsh-cmdk/recent';
     var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    var IS_MAC = /Mac|iPhone|iPad|iPod/.test(String(navigator.platform || navigator.userAgent || ''));
+    var MOD_KEY = IS_MAC ? '⌘' : 'Ctrl';
+    var HOTKEY = MOD_KEY + 'K';
 
     var C = {
       text: 'var(--dsw-alias-label-primary)',
@@ -56,6 +60,7 @@ window.__ModuleLoader__.load({
         searching: '正在搜索…',
         action: '动作',
         session: '会话',
+        untitled: '无标题',
         workspace: '工作区',
         theme: '外观',
         system: '系统',
@@ -110,6 +115,7 @@ window.__ModuleLoader__.load({
         copied: '已复制',
         done: '完成',
         failed: '失败',
+        failedSep: '：',
         fontNow: '字号',
       },
       en: {
@@ -131,6 +137,7 @@ window.__ModuleLoader__.load({
         searching: 'Searching…',
         action: 'Actions',
         session: 'Sessions',
+        untitled: 'Untitled',
         workspace: 'Workspaces',
         theme: 'Appearance',
         system: 'System',
@@ -184,6 +191,7 @@ window.__ModuleLoader__.load({
         copied: 'Copied',
         done: 'Done',
         failed: 'Failed',
+        failedSep: ': ',
         fontNow: 'Font size',
       },
     };
@@ -415,6 +423,17 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Frecency: how often it was used, discounted by a one-week half-life.
+     * A brand-new action (count 1) beats something used twice a month ago.
+     */
+    function frecency(hit, now) {
+      if (!hit || (!hit.at && !hit.count)) return 0;
+      var count = Math.max(1, Math.min(hit.count || 1, 40));
+      var ageDays = Math.max(0, ((now || Date.now()) - (hit.at || 0)) / 86400000);
+      return count * Math.pow(0.5, ageDays / 7);
+    }
+
     // ---------------------------------------------------------------------
     // item helpers
     // ---------------------------------------------------------------------
@@ -532,12 +551,19 @@ window.__ModuleLoader__.load({
           revealPath(cwd).then(() => ({ status: t.done })),
         ),
         item('action:export', 'action', t.exportMd, t.exportMdHint, () =>
-          getJson(API + '/export?id=' + encodeURIComponent(id)).then((payload) => {
-            var blob = new Blob([payload.markdown], { type: 'text/markdown;charset=utf-8' });
+          fetch('/api/session.markdown?sessionId=' + encodeURIComponent(id), {
+            headers: { Accept: 'text/markdown' },
+          }).then((response) => {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.text();
+          }).then((markdown) => {
+            var fallback = entry.title || id || 'session';
+            var filename = String(fallback).replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80) + '.md';
+            var blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
             var url = URL.createObjectURL(blob);
             var anchor = document.createElement('a');
             anchor.href = url;
-            anchor.download = payload.filename || 'session.md';
+            anchor.download = filename;
             document.body.appendChild(anchor);
             anchor.click();
             anchor.remove();
@@ -718,23 +744,46 @@ window.__ModuleLoader__.load({
       return t.recent;
     }
 
-    function buildRoot(ctx, lang, query, catalog, workspaces, recent, plugins, ext, reloadPlugins) {
+    function buildRoot(ctx, lang, query, catalog, hits, workspaces, recent, plugins, ext, reloadPlugins) {
       var items = [];
-      // keep the verbs reachable: a long transcript list would push them away
-      catalog.slice(0, query.trim() ? catalog.length : 5).forEach((entry) => items.push(sessionItem(ctx, lang, entry)));
-      (plugins || []).slice(0, query.trim() ? plugins.length : 6).forEach((plugin) => items.push(pluginItem(ctx, lang, plugin, reloadPlugins)));
+      var text = query.trim();
+      var now = Date.now();
+      var seenSessions = new Set();
+      var sessionRows = [];
+      // Local-first: every catalogue row is fuzzy-matched in the browser, so
+      // keystrokes never wait for the Host. Content hits arrive separately.
+      var requested = text ? catalog : catalog.slice(0, 5);
+      requested.forEach(function (entry) {
+        var row = sessionItem(ctx, lang, entry);
+        if (text && scoreOf(query, row) <= 0) return;
+        seenSessions.add(entry.sessionId);
+        sessionRows.push(row);
+      });
+      if (text) {
+        (hits || []).forEach(function (entry) {
+          if (seenSessions.has(entry.sessionId)) return;
+          seenSessions.add(entry.sessionId);
+          var row = sessionItem(ctx, lang, entry);
+          row.force = true;
+          sessionRows.push(row);
+        });
+      }
+      sessionRows.forEach(function (row) {
+        items.push(row);
+      });
+      (plugins || []).slice(0, text ? plugins.length : 6).forEach((plugin) => items.push(pluginItem(ctx, lang, plugin, reloadPlugins)));
       buildActions(ctx, lang).forEach((entry) => items.push(entry));
       workspaces.forEach((workspace) => items.push(workspaceItem(ctx, lang, workspace)));
       (ext || []).forEach((command) => items.push(extItem(ctx, lang, command)));
       buildThemes(ctx, lang).forEach((entry) => items.push(entry));
       buildLanguages(ctx, lang).forEach((entry) => items.push(entry));
 
-      if (!query.trim()) {
+      if (!text) {
         // a short "recent" band on top, then the natural groups
         var ranked = items
           .map((entry) => ({ entry: entry, hit: recent[entry.key] }))
-          .filter((row) => row.hit && row.hit.at)
-          .sort((a, b) => (b.hit.at || 0) - (a.hit.at || 0))
+          .filter((row) => row.hit && (row.hit.at || row.hit.count))
+          .sort((a, b) => frecency(b.hit, now) - frecency(a.hit, now))
           .slice(0, 4)
           .map((row) => row.entry);
         var seen = new Set(ranked.map((entry) => entry.key));
@@ -745,12 +794,10 @@ window.__ModuleLoader__.load({
 
       var scored = [];
       items.forEach((entry) => {
-        var score = scoreOf(query, entry);
-        if (!entry.key.startsWith('session:')) {
-          // the Host already filtered sessions; local items need their own match
-          if (score <= 0) return;
-        }
-        var bump = recent[entry.key] && recent[entry.key].at ? Math.min(recent[entry.key].count || 0, 6) * 0.02 : 0;
+        var score = entry.force ? Math.max(scoreOf(query, entry), 0.95) : scoreOf(query, entry);
+        if (score <= 0) return;
+        var hit = recent[entry.key];
+        var bump = hit ? Math.min(frecency(hit, now), 8) * 0.015 : 0;
         scored.push({ entry: entry, score: score + bump });
       });
       // keep every group contiguous: a group's place comes from its best hit, the
@@ -1164,7 +1211,7 @@ window.__ModuleLoader__.load({
       var t = copy(lang);
       var open = useOpen();
       var [query, setQuery] = useState('');
-      var [catalog, setCatalog] = useState({ items: [], loading: true });
+      var [catalog, setCatalog] = useState({ items: [], hits: [], hitsFor: '', loading: true });
       var [index, setIndex] = useState(0);
       var [stack, setStack] = useState([]);
       var [input, setInput] = useState(null);
@@ -1253,16 +1300,17 @@ window.__ModuleLoader__.load({
         setStatus(null);
         var timer = setTimeout(
           () => {
-            setCatalog((prev) => (prev.items.length ? prev : { items: [], loading: true }));
+            setCatalog((prev) => (prev.items.length ? prev : { items: [], hits: [], hitsFor: '', loading: true }));
             getJson(API + '/sessions?limit=24' + (text ? '&q=' + encodeURIComponent(text) : ''))
               .then((payload) => {
                 if (!alive) return;
                 var live = (payload.items || []).filter((entry) => !archived[entry.sessionId]);
-                setCatalog({ items: live, loading: false });
+                var liveHits = (payload.hits || []).filter((entry) => !archived[entry.sessionId]);
+                setCatalog({ items: live, hits: liveHits, hitsFor: text, loading: false });
               })
               .catch(() => {
                 if (!alive) return;
-                setCatalog({ items: [], loading: false });
+                setCatalog({ items: [], hits: [], hitsFor: text, loading: false });
               });
           },
           text ? 180 : 0,
@@ -1311,7 +1359,12 @@ window.__ModuleLoader__.load({
       for (var vi = 0; vi < catalog.items.length; vi += 1) {
         if (!archived[catalog.items[vi].sessionId]) visible.push(catalog.items[vi]);
       }
-      var root = buildRoot(ctx, lang, query, visible, workspaces, recent, plugins, ext, reloadPlugins);
+      var visibleHits = [];
+      var freshHits = catalog.hitsFor === query.trim() ? catalog.hits : [];
+      for (var hi = 0; hi < freshHits.length; hi += 1) {
+        if (!archived[freshHits[hi].sessionId]) visibleHits.push(freshHits[hi]);
+      }
+      var root = buildRoot(ctx, lang, query, visible, visibleHits, workspaces, recent, plugins, ext, reloadPlugins);
       var current = stack.length ? stack[stack.length - 1] : null;
       var items = input ? [] : current ? current.items : root;
       var active = Math.min(index, Math.max(items.length - 1, 0));
@@ -1384,7 +1437,7 @@ window.__ModuleLoader__.load({
         try {
           result = entry.run();
         } catch (error) {
-          setStatus(t.failed + '：' + String((error && error.message) || error));
+          setStatus(t.failed + t.failedSep + String((error && error.message) || error));
           return;
         }
         if (result && typeof result.then === 'function') {
@@ -1396,7 +1449,7 @@ window.__ModuleLoader__.load({
             },
             (error) => {
               setBusy(false);
-              setStatus(t.failed + '：' + String((error && error.message) || error));
+              setStatus(t.failed + t.failedSep + String((error && error.message) || error));
             },
           );
           return;
@@ -1423,7 +1476,7 @@ window.__ModuleLoader__.load({
         try {
           pending = input.submit(value);
         } catch (error) {
-          setStatus(t.failed + '：' + String((error && error.message) || error));
+          setStatus(t.failed + t.failedSep + String((error && error.message) || error));
           return;
         }
         setBusy(true);
@@ -1435,7 +1488,7 @@ window.__ModuleLoader__.load({
           },
           (error) => {
             setBusy(false);
-            setStatus(t.failed + '：' + String((error && error.message) || error));
+            setStatus(t.failed + t.failedSep + String((error && error.message) || error));
           },
         );
       }
@@ -2117,7 +2170,7 @@ window.__ModuleLoader__.load({
         {
           type: 'button',
           onClick: () => store.toggle(),
-          title: '⌘K / Ctrl+K',
+          title: HOTKEY,
           onMouseEnter: () => setHover(true),
           onMouseLeave: () => setHover(false),
           style: {
@@ -2144,7 +2197,7 @@ window.__ModuleLoader__.load({
           { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
           t.footer || '搜索',
         ),
-        h(Kbd, null, '⌘K'),
+        h(Kbd, null, HOTKEY),
       );
     }
 
