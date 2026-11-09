@@ -616,11 +616,25 @@ window.__ModuleLoader__.load({
           })),
         ),
         item('cmd:reload', 'action', t.reload, t.reloadHint, () => {
-          window.location.reload();
+          reloadDocument();
           return undefined;
         }),
       ];
       return list;
+    }
+
+    // A plain location.reload() may re-use the cached document, whose boot
+    // manifest still names the previous plugin revisions. The Host rejects a
+    // stale revision outright, so the window would reload into a blank page.
+    // Bumping a query parameter forces a fresh document fetch.
+    function reloadDocument() {
+      try {
+        var url = new URL(window.location.href);
+        url.searchParams.set('_reload', String(Date.now()));
+        window.location.replace(url.toString());
+      } catch (error) {
+        window.location.reload();
+      }
     }
 
     function buildThemes(ctx, lang) {
@@ -750,9 +764,19 @@ window.__ModuleLoader__.load({
       var now = Date.now();
       var seenSessions = new Set();
       var sessionRows = [];
+      // Every list below can arrive in an unexpected shape while the Host is
+      // restarting or plugins reload. A bad payload must degrade to an empty
+      // group, never throw: this component lives in shell.overlay, so one
+      // exception here takes the whole window down.
+      var catalogRows = Array.isArray(catalog) ? catalog : [];
+      var hitRows = Array.isArray(hits) ? hits : [];
+      var workspaceRows = Array.isArray(workspaces) ? workspaces : [];
+      var pluginRows = Array.isArray(plugins) ? plugins : [];
+      var extRows = Array.isArray(ext) ? ext : [];
+      var recentMap = recent && typeof recent === 'object' ? recent : {};
       // Local-first: every catalogue row is fuzzy-matched in the browser, so
       // keystrokes never wait for the Host. Content hits arrive separately.
-      var requested = text ? catalog : catalog.slice(0, 5);
+      var requested = text ? catalogRows : catalogRows.slice(0, 5);
       requested.forEach(function (entry) {
         var row = sessionItem(ctx, lang, entry);
         if (text && scoreOf(query, row) <= 0) return;
@@ -760,7 +784,7 @@ window.__ModuleLoader__.load({
         sessionRows.push(row);
       });
       if (text) {
-        (hits || []).forEach(function (entry) {
+        hitRows.forEach(function (entry) {
           if (seenSessions.has(entry.sessionId)) return;
           seenSessions.add(entry.sessionId);
           var row = sessionItem(ctx, lang, entry);
@@ -771,17 +795,17 @@ window.__ModuleLoader__.load({
       sessionRows.forEach(function (row) {
         items.push(row);
       });
-      (plugins || []).slice(0, text ? plugins.length : 6).forEach((plugin) => items.push(pluginItem(ctx, lang, plugin, reloadPlugins)));
+      pluginRows.slice(0, text ? pluginRows.length : 6).forEach((plugin) => items.push(pluginItem(ctx, lang, plugin, reloadPlugins)));
       buildActions(ctx, lang).forEach((entry) => items.push(entry));
-      workspaces.forEach((workspace) => items.push(workspaceItem(ctx, lang, workspace)));
-      (ext || []).forEach((command) => items.push(extItem(ctx, lang, command)));
+      workspaceRows.forEach((workspace) => items.push(workspaceItem(ctx, lang, workspace)));
+      extRows.forEach((command) => items.push(extItem(ctx, lang, command)));
       buildThemes(ctx, lang).forEach((entry) => items.push(entry));
       buildLanguages(ctx, lang).forEach((entry) => items.push(entry));
 
       if (!text) {
         // a short "recent" band on top, then the natural groups
         var ranked = items
-          .map((entry) => ({ entry: entry, hit: recent[entry.key] }))
+          .map((entry) => ({ entry: entry, hit: recentMap[entry.key] }))
           .filter((row) => row.hit && (row.hit.at || row.hit.count))
           .sort((a, b) => frecency(b.hit, now) - frecency(a.hit, now))
           .slice(0, 4)
@@ -796,7 +820,7 @@ window.__ModuleLoader__.load({
       items.forEach((entry) => {
         var score = entry.force ? Math.max(scoreOf(query, entry), 0.95) : scoreOf(query, entry);
         if (score <= 0) return;
-        var hit = recent[entry.key];
+        var hit = recentMap[entry.key];
         var bump = hit ? Math.min(frecency(hit, now), 8) * 0.015 : 0;
         scored.push({ entry: entry, score: score + bump });
       });
@@ -1355,16 +1379,27 @@ window.__ModuleLoader__.load({
         return () => clearTimeout(handle);
       }, [status]);
 
+      var catalogState = catalog && typeof catalog === 'object' ? catalog : {};
+      var catalogItems = Array.isArray(catalogState.items) ? catalogState.items : [];
+      var archivedMap = archived && typeof archived === 'object' ? archived : {};
       var visible = [];
-      for (var vi = 0; vi < catalog.items.length; vi += 1) {
-        if (!archived[catalog.items[vi].sessionId]) visible.push(catalog.items[vi]);
+      for (var vi = 0; vi < catalogItems.length; vi += 1) {
+        if (!archivedMap[catalogItems[vi].sessionId]) visible.push(catalogItems[vi]);
       }
       var visibleHits = [];
-      var freshHits = catalog.hitsFor === query.trim() ? catalog.hits : [];
+      var freshHits = catalogState.hitsFor === query.trim() && Array.isArray(catalogState.hits) ? catalogState.hits : [];
       for (var hi = 0; hi < freshHits.length; hi += 1) {
-        if (!archived[freshHits[hi].sessionId]) visibleHits.push(freshHits[hi]);
+        if (!archivedMap[freshHits[hi].sessionId]) visibleHits.push(freshHits[hi]);
       }
-      var root = buildRoot(ctx, lang, query, visible, visibleHits, workspaces, recent, plugins, ext, reloadPlugins);
+      var root;
+      try {
+        root = buildRoot(ctx, lang, query, visible, visibleHits, workspaces, recent, plugins, ext, reloadPlugins);
+      } catch (error) {
+        // Rendering this palette must never take the shell down: an unexpected
+        // payload degrades to an empty list instead of a crashed overlay.
+        if (typeof console !== 'undefined' && console.error) console.error('dsh-cmdk: command list failed', error);
+        root = [];
+      }
       var current = stack.length ? stack[stack.length - 1] : null;
       var items = input ? [] : current ? current.items : root;
       var active = Math.min(index, Math.max(items.length - 1, 0));
@@ -1404,7 +1439,7 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         syncScrollFade();
-      }, [open, items.length, query, stack.length, input, catalog.loading]);
+      }, [open, items.length, query, stack.length, input, catalogState.loading]);
 
       function remember(key) {
         var next = bumpRecent(key);
@@ -2001,7 +2036,7 @@ window.__ModuleLoader__.load({
               ? null
               : items.length
                 ? rows
-                : catalog.loading
+                : catalogState.loading
                   ? h(Skeleton)
                   : h(EmptyState, { t: t, query: query }),
           ),
@@ -2040,7 +2075,7 @@ window.__ModuleLoader__.load({
                   border: 0,
                 },
               },
-              !input && query && !catalog.loading ? items.length + ' ' + t.results : '',
+              !input && query && !catalogState.loading ? items.length + ' ' + t.results : '',
             ),
             footerLeft,
             h(
