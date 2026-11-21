@@ -1,6 +1,6 @@
 {
   "name": "dsh-cmdk",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "module",
   "description": "⌘K command palette for DeepSeek Harness: search sessions and message content (with message-level jumps), run commands, extend via providers.",
   "icon": "icon.svg",
@@ -30,7 +30,7 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "docs/upgrade-plan.md"
+    "docs"
   ],
   "dsh": {
     "bundle": {

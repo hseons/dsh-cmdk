@@ -25,7 +25,8 @@ window.__ModuleLoader__.load({
     var IS_MAC = /Mac|iPhone|iPad|iPod/.test(String(navigator.platform || navigator.userAgent || ''));
     var MOD_KEY = IS_MAC ? '⌘' : 'Ctrl';
     var HOTKEY = MOD_KEY + 'K';
-    var VERSION = '0.4.3';
+    // Filled from /cmdk/info at open time; hosts own the number, not this file.
+    var VERSION = '';
 
     var C = {
       text: 'var(--dsw-alias-label-primary)',
@@ -1549,7 +1550,7 @@ window.__ModuleLoader__.load({
           );
         });
       }
-      rows.push(item('help:version', 'system', t.helpVersion, 'dsh-cmdk ' + version, () => undefined));
+      rows.push(item('help:version', 'system', t.helpVersion, 'dsh-cmdk ' + (version || '—'), () => undefined));
       return rows;
     }
 
