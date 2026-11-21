@@ -25,6 +25,7 @@ window.__ModuleLoader__.load({
     var IS_MAC = /Mac|iPhone|iPad|iPod/.test(String(navigator.platform || navigator.userAgent || ''));
     var MOD_KEY = IS_MAC ? '⌘' : 'Ctrl';
     var HOTKEY = MOD_KEY + 'K';
+    var VERSION = '0.4.0';
 
     var C = {
       text: 'var(--dsw-alias-label-primary)',
@@ -117,6 +118,38 @@ window.__ModuleLoader__.load({
         failed: '失败',
         failedSep: '：',
         fontNow: '字号',
+        modeAll: '搜索会话、工作区，或输入 > @ # / = ? 切换模式',
+        modeCommand: '只搜命令',
+        modeSession: '只搜会话（标题与正文）',
+        modeWorkspace: '只搜工作区',
+        modeFile: '搜索文件路径',
+        modeCalc: '输入算式，回车复制结果',
+        modeHelp: '键盘、模式与扩展命令',
+        helpTitle: '帮助',
+        helpKeys: '键盘与模式',
+        helpKeysSub: '↑↓ 选择 · ↵ 执行 · → 更多 · ← 返回 · esc 关闭',
+        helpModes: '模式前缀',
+        helpModesSub: '> 命令 · @ 会话 · # 工作区 · / 文件 · = 计算 · ? 帮助',
+        helpProviders: '扩展命令',
+        helpNoProviders: '还没有其它插件注册命令',
+        helpProviderSub: '{n} 条命令',
+        helpVersion: '版本',
+        hitAt: '第 {n} 条',
+        hitFor: '正文命中',
+        forkHere: '从这条消息 Fork',
+        forkHereHint: '以这条消息为分支点开新会话',
+        copySnippet: '复制命中片段',
+        askAbout: '用这段内容追问',
+        askAboutHint: '新开一个会话并预填这段内容',
+        preview: '查看上下文',
+        previewHint: '读命中消息前后几行',
+        ctxTitle: '消息上下文',
+        configDepth: '全文搜索深度',
+        configCalc: '计算器',
+        configOn: '开',
+        configOff: '关',
+        depthStatus: '扫描会话数',
+        noDepth: '先用 > @ # / = ? 哪个模式？',
       },
       en: {
         footer: 'Search',
@@ -193,6 +226,38 @@ window.__ModuleLoader__.load({
         failed: 'Failed',
         failedSep: ': ',
         fontNow: 'Font size',
+        modeAll: 'Search sessions and workspaces, or type > @ # / = ? for a mode',
+        modeCommand: 'Commands only',
+        modeSession: 'Sessions only (titles and messages)',
+        modeWorkspace: 'Workspaces only',
+        modeFile: 'Search file paths',
+        modeCalc: 'Type an expression, ↵ copies the result',
+        modeHelp: 'Keys, modes and extension commands',
+        helpTitle: 'Help',
+        helpKeys: 'Keys and modes',
+        helpKeysSub: '↑↓ select · ↵ run · → more · ← back · esc close',
+        helpModes: 'Mode prefixes',
+        helpModesSub: '> commands · @ sessions · # workspaces · / files · = calc · ? help',
+        helpProviders: 'Extension commands',
+        helpNoProviders: 'No other plugin has registered commands yet',
+        helpProviderSub: '{n} commands',
+        helpVersion: 'Version',
+        hitAt: 'message {n}',
+        hitFor: 'content match',
+        forkHere: 'Fork from this message',
+        forkHereHint: 'Branch a new session at this message',
+        copySnippet: 'Copy matched snippet',
+        askAbout: 'Ask about this',
+        askAboutHint: 'Open a new session prefilled with this text',
+        preview: 'Show context',
+        previewHint: 'Read the messages around the match',
+        ctxTitle: 'Message context',
+        configDepth: 'Full-text search depth',
+        configCalc: 'Calculator',
+        configOn: 'on',
+        configOff: 'off',
+        depthStatus: 'sessions scanned',
+        noDepth: 'Which mode? > @ # / = ?',
       },
     };
 
@@ -221,6 +286,280 @@ window.__ModuleLoader__.load({
         else out += initialOf(code);
       }
       return out;
+    }
+
+    // ---------------------------------------------------------------------
+    // config: one small localStorage record, defaults survive private mode
+    // ---------------------------------------------------------------------
+    var CONFIG_KEY = 'dsh-cmdk/config';
+    var DEFAULT_CONFIG = { contentDepth: 40, calc: true, frecency: true };
+
+    function readConfig() {
+      var out = {
+        contentDepth: DEFAULT_CONFIG.contentDepth,
+        calc: DEFAULT_CONFIG.calc,
+        frecency: DEFAULT_CONFIG.frecency,
+      };
+      try {
+        var raw = window.localStorage.getItem(CONFIG_KEY);
+        var parsed = raw ? JSON.parse(raw) : null;
+        if (parsed && typeof parsed === 'object') {
+          if (Number.isFinite(parsed.contentDepth)) {
+            out.contentDepth = Math.max(4, Math.min(200, Math.round(parsed.contentDepth)));
+          }
+          if (typeof parsed.calc === 'boolean') out.calc = parsed.calc;
+          if (typeof parsed.frecency === 'boolean') out.frecency = parsed.frecency;
+        }
+      } catch {
+        /* a broken or absent record keeps the defaults */
+      }
+      return out;
+    }
+
+    function writeConfig(patch) {
+      var next = readConfig();
+      if (patch && typeof patch === 'object') {
+        if (Number.isFinite(patch.contentDepth)) {
+          next.contentDepth = Math.max(4, Math.min(200, Math.round(patch.contentDepth)));
+        }
+        if (typeof patch.calc === 'boolean') next.calc = patch.calc;
+        if (typeof patch.frecency === 'boolean') next.frecency = patch.frecency;
+      }
+      try {
+        window.localStorage.setItem(CONFIG_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    }
+
+    // ---------------------------------------------------------------------
+    // query modes: one leading sigil switches what the list is made of
+    // ---------------------------------------------------------------------
+    var MODES = {
+      '>': 'command',
+      '@': 'session',
+      '#': 'workspace',
+      '/': 'file',
+      '=': 'calc',
+      '?': 'help',
+    };
+
+    function parseQuery(raw) {
+      var text = String(raw == null ? '' : raw);
+      var lead = text.charAt(0);
+      var mode = MODES[lead];
+      if (!mode) return { mode: 'all', text: text.trim(), prefix: '' };
+      return { mode: mode, text: text.slice(1).trim(), prefix: lead };
+    }
+
+    /** Pocket calculator: digits and operators only, never a general eval. */
+    function calc(expr) {
+      var text = String(expr == null ? '' : expr).trim();
+      if (!text || text.length > 200) return null;
+      if (!/^[\d\s+\-*/().%^]+$/.test(text)) return null;
+      var value;
+      try {
+        value = Function('"use strict";return (' + text.replace(/\^/g, '**') + ')')();
+      } catch {
+        return null;
+      }
+      if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+      if (Math.abs(value) >= 1e15 || (value !== 0 && Math.abs(value) < 1e-6)) {
+        return value.toExponential(6);
+      }
+      return String(Math.round(value * 1e10) / 1e10);
+    }
+
+    // ---------------------------------------------------------------------
+    // extension providers (v2): static commands + an async search hook
+    // ---------------------------------------------------------------------
+    var PROVIDER_TIMEOUT = 150;
+    var providers = [];
+    var providerListeners = new Set();
+
+    function emitProviders() {
+      providerListeners.forEach((fn) => {
+        try {
+          fn();
+        } catch {
+          /* a broken listener must not break registration */
+        }
+      });
+    }
+
+    function providerTitle(entry, lang) {
+      var title = entry && entry.title;
+      if (typeof title === 'string' && title) return title;
+      if (title && typeof title === 'object') {
+        var picked = title[lang] || title.zh || title.en;
+        if (typeof picked === 'string' && picked) return picked;
+      }
+      return entry && entry.id ? entry.id : '';
+    }
+
+    function validCommand(spec) {
+      return !!spec && typeof spec.id === 'string' && !!spec.id && typeof spec.title === 'string' && !!spec.title && typeof spec.run === 'function';
+    }
+
+    /**
+     * A plugin contributes a whole provider:
+     *   registerProvider({ id, title, icon?, prefix?, commands?, search?, dispose? })
+     * `search(text, { signal, limit })` may resolve an array of result rows:
+     *   { id, title, subtitle?, keywords?, badge?, score?, icon?, run(ctx), actions?, preview? }
+     * A provider that throws or takes longer than PROVIDER_TIMEOUT drops out of
+     * the current query; the rest of the palette keeps working.
+     */
+    function registerProvider(spec) {
+      if (!spec || typeof spec.id !== 'string' || !spec.id) return false;
+      var commands = Array.isArray(spec.commands) ? spec.commands.filter(validCommand) : [];
+      var search = typeof spec.search === 'function' ? spec.search : null;
+      if (!commands.length && !search) return false;
+      var entry = {
+        id: spec.id,
+        title: spec.title == null ? spec.id : spec.title,
+        icon: typeof spec.icon === 'string' && spec.icon ? spec.icon : 'plugin',
+        prefix: typeof spec.prefix === 'string' ? spec.prefix.trim() : '',
+        commands: commands,
+        search: search,
+        onOpen: typeof spec.onOpen === 'function' ? spec.onOpen : null,
+        onClose: typeof spec.onClose === 'function' ? spec.onClose : null,
+        dispose: typeof spec.dispose === 'function' ? spec.dispose : null,
+      };
+      providers = providers.filter((row) => row.id !== entry.id);
+      providers.push(entry);
+      emitProviders();
+      return true;
+    }
+
+    function unregisterProvider(id) {
+      var found = null;
+      providers = providers.filter((row) => {
+        if (row.id !== id) return true;
+        found = row;
+        return false;
+      });
+      if (!found) return false;
+      if (found.dispose) {
+        try {
+          found.dispose();
+        } catch {
+          /* a bad dispose must not block removal */
+        }
+      }
+      emitProviders();
+      return true;
+    }
+
+    function listProviders() {
+      return providers.map((row) => ({
+        id: row.id,
+        title: providerTitle(row, 'en'),
+        prefix: row.prefix,
+        commands: row.commands.length,
+        search: !!row.search,
+      }));
+    }
+
+    function useProviders() {
+      var [, bump] = useState(0);
+      useEffect(() => {
+        var listener = () => bump((value) => value + 1);
+        providerListeners.add(listener);
+        return () => providerListeners.delete(listener);
+      }, []);
+      return providers;
+    }
+
+    /** "git checkout" hands the rest of the query to the provider owning "git". */
+    function resolveProviderPrefix(text, providerRows) {
+      var value = String(text == null ? '' : text);
+      var space = value.indexOf(' ');
+      if (space <= 0) return { provider: null, text: value };
+      var head = value.slice(0, space).toLowerCase();
+      var match = null;
+      (Array.isArray(providerRows) ? providerRows : []).forEach((row) => {
+        if (match || !row || !row.prefix) return;
+        if (String(row.prefix).toLowerCase() === head) match = row;
+      });
+      if (!match) return { provider: null, text: value };
+      return { provider: match, text: value.slice(space + 1).trim() };
+    }
+
+    function normalizeProviderRow(row, provider) {
+      if (!row || typeof row !== 'object') return null;
+      var id = typeof row.id === 'string' && row.id ? row.id : '';
+      if (!id) return null;
+      if (typeof row.title !== 'string' || !row.title) return null;
+      if (typeof row.run !== 'function') return null;
+      return {
+        id: id,
+        providerId: provider.id,
+        providerTitle: provider.title,
+        icon: typeof row.icon === 'string' && row.icon ? row.icon : provider.icon,
+        prefix: provider.prefix,
+        title: row.title,
+        subtitle: typeof row.subtitle === 'string' ? row.subtitle : '',
+        keywords: Array.isArray(row.keywords) ? row.keywords.filter((word) => typeof word === 'string') : [],
+        badge: typeof row.badge === 'string' ? row.badge : '',
+        score: typeof row.score === 'number' && Number.isFinite(row.score) ? row.score : null,
+        run: row.run,
+        actions: Array.isArray(row.actions) ? row.actions.filter(validCommand) : null,
+        preview: typeof row.preview === 'function' ? row.preview : null,
+      };
+    }
+
+    function runProviderSearch(text, signal, limit, onlyId) {
+      var budget = typeof limit === 'number' && limit > 0 ? limit : 8;
+      var active = providers.filter((row) => row.search && (!onlyId || row.id === onlyId));
+      if (!active.length) return Promise.resolve([]);
+      return Promise.all(
+        active.map(
+          (provider) =>
+            new Promise((resolve) => {
+              var settled = false;
+              var timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                resolve([]);
+              }, PROVIDER_TIMEOUT);
+              var finish = (value) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                var rows = Array.isArray(value) ? value : [];
+                var out = [];
+                rows.slice(0, budget).forEach((row) => {
+                  var normalized = normalizeProviderRow(row, provider);
+                  if (normalized) out.push(normalized);
+                });
+                resolve(out);
+              };
+              try {
+                Promise.resolve(provider.search(text, { signal: signal, limit: budget })).then(
+                  finish,
+                  (error) => {
+                    if (typeof console !== 'undefined' && console.warn) {
+                      console.warn('dsh-cmdk: provider "' + provider.id + '" failed', error);
+                    }
+                    finish([]);
+                  },
+                );
+              } catch (error) {
+                if (typeof console !== 'undefined' && console.warn) {
+                  console.warn('dsh-cmdk: provider "' + provider.id + '" threw', error);
+                }
+                finish([]);
+              }
+            }),
+        ),
+      ).then((groups) => {
+        var out = [];
+        groups.forEach((rows) => {
+          rows.forEach((row) => out.push(row));
+        });
+        return out;
+      });
     }
 
     // ---------------------------------------------------------------------
@@ -465,12 +804,26 @@ window.__ModuleLoader__.load({
       var t = copy(lang);
       var id = entry.sessionId;
       var title = entry.title || t.untitled;
+      var seq = typeof entry.seq === 'number' && Number.isFinite(entry.seq) ? entry.seq : null;
       var run = () => {
         ctx.uiWorkspace.openSession(id);
         return undefined;
       };
       var actions = () => sessionActions(ctx, lang, entry);
-      return item('session:' + id, 'session', title, entry.snippet || shortPath(entry.cwd), run, actions);
+      var sub = entry.snippet || shortPath(entry.cwd);
+      if (seq !== null && entry.snippet) {
+        sub = t.hitAt.replace('{n}', String(seq)) + ' · ' + entry.snippet;
+      }
+      var row = item(
+        'session:' + id + (seq !== null ? ':' + seq : ''),
+        'session',
+        title,
+        sub,
+        run,
+        actions,
+      );
+      if (entry.snippet) row.force = true;
+      return row;
     }
 
     function renameOf(ctx, id, title) {
@@ -511,7 +864,59 @@ window.__ModuleLoader__.load({
       var t = copy(lang);
       var id = entry.sessionId;
       var cwd = entry.cwd || '';
-      return [
+      var seq = typeof entry.seq === 'number' && Number.isFinite(entry.seq) ? entry.seq : null;
+      var snippet = typeof entry.snippet === 'string' ? entry.snippet : '';
+      // Message-level actions only exist for a content hit: they need the seq
+      // the Host's full-text search attached to the match.
+      var head = [];
+      if (seq !== null) {
+        head.push(
+          item('action:fork-here', 'action', t.forkHere, t.forkHereHint, () =>
+            Promise.resolve(ctx.sessions.fork({ sessionId: id, atSeq: seq })).then((childId) => {
+              if (childId) ctx.uiWorkspace.openSession(childId);
+              return { status: t.done };
+            }),
+          ),
+        );
+      }
+      if (snippet) {
+        head.push(
+          item('action:copy-snippet', 'action', t.copySnippet, snippet, () =>
+            copyText(snippet).then(() => ({ status: t.copied })),
+          ),
+          item('action:ask-about', 'action', t.askAbout, t.askAboutHint, () => {
+            ctx.uiWorkspace.startSession(undefined, {
+              prompt: '关于这段内容：\n\n> ' + snippet + '\n\n',
+              whenDraftExists: 'append',
+            });
+            return undefined;
+          }),
+        );
+      }
+      if (seq !== null) {
+        head.push(
+          item('action:preview', 'action', t.preview, t.previewHint, () =>
+            getJson(API + '/message?sessionId=' + encodeURIComponent(id) + '&seq=' + String(seq)).then(
+              (payload) => {
+                var around = Array.isArray(payload.around) ? payload.around : [];
+                var rows = around.map((line) => {
+                  var at = typeof line.seq === 'number' ? line.seq : 0;
+                  var body = String(line.text || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+                  return item(
+                    'ctx:' + at,
+                    'action',
+                    body || '—',
+                    at === seq ? t.hitFor : '#' + at,
+                    () => copyText(String(line.text || '')).then(() => ({ status: t.copied })),
+                  );
+                });
+                return { push: { title: t.ctxTitle, items: rows } };
+              },
+            ),
+          ),
+        );
+      }
+      return head.concat([
         item('action:open', 'action', t.sessionOpen, t.sessionOpenHint, () => {
           ctx.uiWorkspace.openSession(id);
           return undefined;
@@ -571,7 +976,7 @@ window.__ModuleLoader__.load({
             return { status: t.done };
           }),
         ),
-      ];
+      ]);
     }
 
     function workspaceActions(ctx, lang, workspace) {
@@ -595,9 +1000,39 @@ window.__ModuleLoader__.load({
       ];
     }
 
+    var FONT_KEY = 'dsh-cmdk/font-text';
+    var FONT_DEFAULT = 14;
+    var FONT_MIN = 10;
+    var FONT_MAX = 22;
+
+    /** The theme service owns the real value; this mirror only seeds the next step. */
+    function fontPx() {
+      try {
+        var raw = Number(window.localStorage.getItem(FONT_KEY));
+        if (Number.isFinite(raw) && raw >= FONT_MIN && raw <= FONT_MAX) return raw;
+      } catch {
+        /* ignore */
+      }
+      return FONT_DEFAULT;
+    }
+
+    function stepFont(ctx, lang, delta) {
+      var t = copy(lang);
+      var base = fontPx();
+      var next = delta === 0 ? FONT_DEFAULT : Math.max(FONT_MIN, Math.min(FONT_MAX, base + delta));
+      ctx.theme.setFontSize('text', next);
+      try {
+        window.localStorage.setItem(FONT_KEY, String(next));
+      } catch {
+        /* ignore */
+      }
+      return { status: t.fontNow + ' ' + next };
+    }
+
     function buildActions(ctx, lang) {
       var t = copy(lang);
-      var list = [
+      var config = readConfig();
+      return [
         item('cmd:new', 'action', t.newSession, t.newSessionHint, () => {
           ctx.uiWorkspace.startSession();
           return undefined;
@@ -619,8 +1054,38 @@ window.__ModuleLoader__.load({
           reloadDocument();
           return undefined;
         }),
+        item('cmd:help', 'system', t.helpTitle, t.helpKeysSub, () => ({ query: '?' })),
+        item('cmd:font-bigger', 'system', t.fontBigger, t.fontNow + ' ' + fontPx(), () =>
+          stepFont(ctx, lang, 1),
+        ),
+        item('cmd:font-smaller', 'system', t.fontSmaller, t.fontNow + ' ' + fontPx(), () =>
+          stepFont(ctx, lang, -1),
+        ),
+        item('cmd:font-reset', 'system', t.fontReset, t.fontNow + ' ' + FONT_DEFAULT, () =>
+          stepFont(ctx, lang, 0),
+        ),
+        item('cmd:depth', 'system', t.configDepth, t.depthStatus + ' ' + config.contentDepth, () => ({
+          input: {
+            kind: 'depth',
+            title: t.configDepth + ' · 4–200',
+            value: String(config.contentDepth),
+            submit: (value) => {
+              var size = Number(value);
+              if (!Number.isFinite(size)) throw new Error('4–200');
+              var next = writeConfig({ contentDepth: size });
+              return { status: t.depthStatus + ' ' + next.contentDepth };
+            },
+          },
+        })),
+        item('cmd:calc', 'system', t.configCalc, config.calc ? t.configOn : t.configOff, () => {
+          var next = writeConfig({ calc: !config.calc });
+          return { status: t.configCalc + ' ' + (next.calc ? t.configOn : t.configOff) };
+        }),
+        item('cmd:frecency', 'system', t.recent, config.frecency ? t.configOn : t.configOff, () => {
+          var next = writeConfig({ frecency: !config.frecency });
+          return { status: t.recent + ' ' + (next.frecency ? t.configOn : t.configOff) };
+        }),
       ];
-      return list;
     }
 
     // A plain location.reload() may re-use the cached document, whose boot
@@ -730,15 +1195,65 @@ window.__ModuleLoader__.load({
         'ext',
         command.title,
         command.sub || '',
-        () => {
-          var out = command.run(ctx);
-          if (out && typeof out.then === 'function') {
-            return out.then((value) => (value && value.status ? { status: value.status } : null));
-          }
-          return out && out.status ? { status: out.status } : null;
-        },
+        () => callRun(command, ctx),
         null,
       );
+    }
+
+    /** Same invocation contract for legacy commands and provider rows. */
+    function callRun(command, ctx) {
+      var out = command.run(ctx);
+      if (out && typeof out.then === 'function') {
+        return out.then((value) => (value && value.status ? { status: value.status } : value || null));
+      }
+      return out && out.status ? { status: out.status } : out || null;
+    }
+
+    function providerItem(ctx, lang, row) {
+      var key = row.providerId + ':' + row.id;
+      var actions = row.actions
+        ? () =>
+            row.actions.map((command) =>
+              item(
+                key + ':' + command.id,
+                'action',
+                command.title,
+                command.sub || '',
+                () => callRun(command, ctx),
+                null,
+              ),
+            )
+        : null;
+      var entry = item(key, 'ext', row.title, row.subtitle || row.badge || '', () => callRun(row, ctx), actions);
+      if (row.icon) entry.icon = row.icon;
+      if (typeof row.score === 'number') entry.score = row.score;
+      entry.force = true;
+      return entry;
+    }
+
+    function buildHelp(ctx, lang, providerRows, version) {
+      var t = copy(lang);
+      var rows = [
+        item('help:keys', 'system', t.helpKeys, t.helpKeysSub, () => undefined),
+        item('help:modes', 'system', t.helpModes, t.helpModesSub, () => undefined),
+      ];
+      if (!providerRows.length) {
+        rows.push(item('help:no-provider', 'system', t.helpNoProviders, '', () => undefined));
+      } else {
+        providerRows.forEach((provider) => {
+          rows.push(
+            item(
+              'help:' + provider.id,
+              'system',
+              providerTitle(provider, lang),
+              t.helpProviderSub.replace('{n}', String(provider.commands.length)),
+              () => undefined,
+            ),
+          );
+        });
+      }
+      rows.push(item('help:version', 'system', t.helpVersion, 'dsh-cmdk ' + version, () => undefined));
+      return rows;
     }
 
     // ---------------------------------------------------------------------
@@ -758,12 +1273,37 @@ window.__ModuleLoader__.load({
       return t.recent;
     }
 
-    function buildRoot(ctx, lang, query, catalog, hits, workspaces, recent, plugins, ext, reloadPlugins) {
+    function buildRoot(ctx, lang, query, catalog, hits, workspaces, recent, plugins, ext, reloadPlugins, extra) {
+      var t = copy(lang);
       var items = [];
       var text = query.trim();
       var now = Date.now();
-      var seenSessions = new Set();
-      var sessionRows = [];
+      var options = extra && typeof extra === 'object' ? extra : {};
+      var parsed = options.parsed && typeof options.parsed === 'object' ? options.parsed : parseQuery(text);
+      var mode = parsed.mode || 'all';
+      var needle = mode === 'all' ? text : parsed.text;
+      var providerRows = Array.isArray(options.providers) ? options.providers : [];
+      var extHits = Array.isArray(options.extHits) ? options.extHits : [];
+      var config = options.config && typeof options.config === 'object' ? options.config : DEFAULT_CONFIG;
+      var version = typeof options.version === 'string' ? options.version : '';
+      var only = mode === 'all' || mode === 'command'
+        ? resolveProviderPrefix(needle, providerRows)
+        : { provider: null, text: needle };
+      if (only.provider) needle = only.text;
+
+      if (mode === 'help') return buildHelp(ctx, lang, providerRows, version);
+
+      if (mode === 'calc') {
+        if (config.calc === false) return [item('calc:off', 'system', t.configCalc, t.configOff, () => undefined)];
+        var total = calc(needle);
+        if (total === null) return [item('calc:hint', 'system', t.modeCalc, needle, () => undefined)];
+        return [
+          item('calc:result', 'system', total, needle || t.modeCalc, () =>
+            copyText(total).then(() => ({ status: t.copied })),
+          ),
+        ];
+      }
+
       // Every list below can arrive in an unexpected shape while the Host is
       // restarting or plugins reload. A bad payload must degrade to an empty
       // group, never throw: this component lives in shell.overlay, so one
@@ -774,35 +1314,69 @@ window.__ModuleLoader__.load({
       var pluginRows = Array.isArray(plugins) ? plugins : [];
       var extRows = Array.isArray(ext) ? ext : [];
       var recentMap = recent && typeof recent === 'object' ? recent : {};
-      // Local-first: every catalogue row is fuzzy-matched in the browser, so
-      // keystrokes never wait for the Host. Content hits arrive separately.
-      var requested = text ? catalogRows : catalogRows.slice(0, 5);
-      requested.forEach(function (entry) {
-        var row = sessionItem(ctx, lang, entry);
-        if (text && scoreOf(query, row) <= 0) return;
-        seenSessions.add(entry.sessionId);
-        sessionRows.push(row);
-      });
-      if (text) {
-        hitRows.forEach(function (entry) {
-          if (seenSessions.has(entry.sessionId)) return;
-          seenSessions.add(entry.sessionId);
+      var wantSession = (mode === 'all' || mode === 'session' || mode === 'file') && !only.provider;
+      var wantCommand = mode === 'all' || mode === 'command';
+      var wantWorkspace = (mode === 'all' || mode === 'workspace' || mode === 'file') && !only.provider && !wantSession;
+      var sessionRows = [];
+      var seenSessions = new Set();
+
+      if (wantSession) {
+        // Local-first: every catalogue row is fuzzy-matched in the browser, so
+        // keystrokes never wait for the Host. Content hits arrive separately.
+        var requested = needle ? catalogRows : catalogRows.slice(0, 5);
+        requested.forEach(function (entry) {
           var row = sessionItem(ctx, lang, entry);
-          row.force = true;
+          if (needle && scoreOf(needle, row) <= 0) return;
+          seenSessions.add(entry.sessionId);
           sessionRows.push(row);
         });
+        if (needle) {
+          hitRows.forEach(function (entry) {
+            if (seenSessions.has(entry.sessionId)) return;
+            seenSessions.add(entry.sessionId);
+            var row = sessionItem(ctx, lang, entry);
+            row.force = true;
+            sessionRows.push(row);
+          });
+        }
       }
       sessionRows.forEach(function (row) {
         items.push(row);
       });
-      pluginRows.slice(0, text ? pluginRows.length : 6).forEach((plugin) => items.push(pluginItem(ctx, lang, plugin, reloadPlugins)));
-      buildActions(ctx, lang).forEach((entry) => items.push(entry));
-      workspaceRows.forEach((workspace) => items.push(workspaceItem(ctx, lang, workspace)));
-      extRows.forEach((command) => items.push(extItem(ctx, lang, command)));
-      buildThemes(ctx, lang).forEach((entry) => items.push(entry));
-      buildLanguages(ctx, lang).forEach((entry) => items.push(entry));
 
-      if (!text) {
+      if (wantCommand) {
+        if (!only.provider) {
+          pluginRows
+            .slice(0, needle ? pluginRows.length : 6)
+            .forEach((plugin) => items.push(pluginItem(ctx, lang, plugin, reloadPlugins)));
+          buildActions(ctx, lang).forEach((entry) => items.push(entry));
+          extRows.forEach((command) => items.push(extItem(ctx, lang, command)));
+        }
+        providerRows.forEach((provider) => {
+          if (only.provider && provider !== only.provider) return;
+          (provider.commands || []).forEach((command) => {
+            var normalized = normalizeProviderRow(command, provider);
+            if (normalized) items.push(providerItem(ctx, lang, normalized));
+          });
+        });
+        extHits.forEach((row) => {
+          if (!row) return;
+          if (only.provider && row.providerId !== only.provider.id) return;
+          items.push(providerItem(ctx, lang, row));
+        });
+        if (!only.provider) {
+          buildThemes(ctx, lang).forEach((entry) => items.push(entry));
+          buildLanguages(ctx, lang).forEach((entry) => items.push(entry));
+        }
+      }
+      if (wantWorkspace && !wantSession) {
+        workspaceRows.forEach((workspace) => items.push(workspaceItem(ctx, lang, workspace)));
+      }
+
+      var useFrecency = config.frecency !== false;
+
+      if (!needle) {
+        if (!useFrecency) return items;
         // a short "recent" band on top, then the natural groups
         var ranked = items
           .map((entry) => ({ entry: entry, hit: recentMap[entry.key] }))
@@ -818,11 +1392,13 @@ window.__ModuleLoader__.load({
 
       var scored = [];
       items.forEach((entry) => {
-        var score = entry.force ? Math.max(scoreOf(query, entry), 0.95) : scoreOf(query, entry);
-        if (score <= 0) return;
-        var hit = recentMap[entry.key];
+        var base = scoreOf(needle, entry);
+        if (entry.force) base = Math.max(base, 0.95);
+        if (typeof entry.score === 'number' && entry.score > base) base = entry.score;
+        if (base <= 0) return;
+        var hit = useFrecency ? recentMap[entry.key] : null;
         var bump = hit ? Math.min(frecency(hit, now), 8) * 0.015 : 0;
-        scored.push({ entry: entry, score: score + bump });
+        scored.push({ entry: entry, score: base + bump });
       });
       // keep every group contiguous: a group's place comes from its best hit, the
       // rows inside keep their own order. Otherwise one group shows up twice.
@@ -1249,7 +1825,11 @@ window.__ModuleLoader__.load({
       var [archived, setArchived] = useState({});
       var [recent, setRecent] = useState(() => readRecent());
       var [plugins, setPlugins] = useState([]);
+      var [configState, setConfigState] = useState(() => readConfig());
+      var [extHits, setExtHits] = useState([]);
       var ext = useExtCommands();
+      var providerList = useProviders();
+      var parsed = parseQuery(query);
 
       function reloadPlugins() {
         getJson(API + '/plugins')
@@ -1316,16 +1896,24 @@ window.__ModuleLoader__.load({
         };
       }, [open]);
 
-      // session catalogue comes from the Host: titles + content hits
+      // session catalogue comes from the Host: titles + content hits. The `?`
+      // and `=` modes answer locally, so they skip the round-trip entirely.
       useEffect(() => {
         if (!open) return undefined;
+        var spec = parseQuery(query);
+        if (spec.mode === 'help' || spec.mode === 'calc') {
+          setCatalog({ items: [], hits: [], hitsFor: query.trim(), loading: false });
+          return undefined;
+        }
         var alive = true;
         var text = query.trim();
+        var needle = spec.text;
         setStatus(null);
         var timer = setTimeout(
           () => {
             setCatalog((prev) => (prev.items.length ? prev : { items: [], hits: [], hitsFor: '', loading: true }));
-            getJson(API + '/sessions?limit=24' + (text ? '&q=' + encodeURIComponent(text) : ''))
+            var params = '?limit=24&depth=' + String(configState.contentDepth);
+            getJson(API + '/sessions' + params + (needle ? '&q=' + encodeURIComponent(needle) : ''))
               .then((payload) => {
                 if (!alive) return;
                 var live = (payload.items || []).filter((entry) => !archived[entry.sessionId]);
@@ -1337,13 +1925,40 @@ window.__ModuleLoader__.load({
                 setCatalog({ items: [], hits: [], hitsFor: text, loading: false });
               });
           },
-          text ? 180 : 0,
+          needle ? 180 : 0,
         );
         return () => {
           alive = false;
           clearTimeout(timer);
         };
-      }, [open, query]);
+      }, [open, query, configState.contentDepth]);
+
+      // provider search: 180 ms after the last keystroke, cancelled on change
+      useEffect(() => {
+        if (!open) return undefined;
+        var spec = parseQuery(query);
+        if (!spec.text || (spec.mode !== 'all' && spec.mode !== 'command')) {
+          setExtHits([]);
+          return undefined;
+        }
+        var scoped = resolveProviderPrefix(spec.text, providers);
+        if (scoped.provider && !scoped.text) {
+          setExtHits([]);
+          return undefined;
+        }
+        var controller = new AbortController();
+        var alive = true;
+        var timer = setTimeout(() => {
+          runProviderSearch(scoped.text, controller.signal, 8, scoped.provider ? scoped.provider.id : null).then((rows) => {
+            if (alive) setExtHits(rows);
+          });
+        }, 180);
+        return () => {
+          alive = false;
+          clearTimeout(timer);
+          controller.abort();
+        };
+      }, [open, query, providerList.length]);
 
       useEffect(() => {
         if (!open) {
@@ -1391,9 +2006,23 @@ window.__ModuleLoader__.load({
       for (var hi = 0; hi < freshHits.length; hi += 1) {
         if (!archivedMap[freshHits[hi].sessionId]) visibleHits.push(freshHits[hi]);
       }
+      var placeholder = t.placeholder;
+      if (parsed.mode === 'command') placeholder = t.modeCommand;
+      else if (parsed.mode === 'session') placeholder = t.modeSession;
+      else if (parsed.mode === 'workspace') placeholder = t.modeWorkspace;
+      else if (parsed.mode === 'file') placeholder = t.modeFile;
+      else if (parsed.mode === 'calc') placeholder = t.modeCalc;
+      else if (parsed.mode === 'help') placeholder = t.modeHelp;
+
       var root;
       try {
-        root = buildRoot(ctx, lang, query, visible, visibleHits, workspaces, recent, plugins, ext, reloadPlugins);
+        root = buildRoot(ctx, lang, query, visible, visibleHits, workspaces, recent, plugins, ext, reloadPlugins, {
+          parsed: parsed,
+          providers: providerList,
+          extHits: extHits,
+          config: configState,
+          version: VERSION,
+        });
       } catch (error) {
         // Rendering this palette must never take the shell down: an unexpected
         // payload degrades to an empty list instead of a crashed overlay.
@@ -1447,8 +2076,22 @@ window.__ModuleLoader__.load({
       }
 
       function settle(result) {
+        setConfigState(readConfig());
         if (!result) {
           close();
+          return;
+        }
+        if (typeof result.query === 'string') {
+          setQuery(result.query);
+          setIndex(0);
+          setStack([]);
+          setStatus(null);
+          return;
+        }
+        if (result.push && Array.isArray(result.push.items)) {
+          setStack(stack.concat([{ title: result.push.title || '', items: result.push.items }]));
+          setIndex(0);
+          setStatus(null);
           return;
         }
         if (result.input) {
@@ -1806,7 +2449,7 @@ window.__ModuleLoader__.load({
             h('input', {
               ref: inputRef,
               value: query,
-              placeholder: t.placeholder,
+              placeholder: placeholder,
               className: 'dsh-cmdk-input',
               onChange: (event) => {
                 setQuery(event.target.value);
@@ -1815,7 +2458,7 @@ window.__ModuleLoader__.load({
               onFocus: () => setFocused(true),
               onBlur: () => setFocused(false),
               style: inputStyle,
-              'aria-label': t.placeholder,
+              'aria-label': placeholder,
               'aria-controls': 'dsh-cmdk-list',
               'aria-activedescendant': items.length ? 'dsh-cmdk-opt-' + active : undefined,
               spellCheck: false,
@@ -2266,15 +2909,26 @@ window.__ModuleLoader__.load({
       window.addEventListener('keydown', onKey, true);
       hotkey = true;
 
-      // Extension point: another plugin can contribute rows.
-      //   window.__DSH_CMDK__.register({ id, title, sub, run(ctx) })
+      // Extension point. The v1 shape keeps working; v2 adds async providers,
+      // prefixes, lifecycle hooks and a help listing.
+      //   window.__DSH_CMDK__.registerProvider({
+      //     id, title, icon, prefix, commands: [], search(query, { signal }), dispose()
+      //   })
       var api = {
-        version: 1,
+        version: 2,
         register: registerCommand,
         unregister: unregisterCommand,
+        registerProvider: registerProvider,
+        unregisterProvider: unregisterProvider,
+        listProviders: listProviders,
         open: () => store.set(true),
         close: () => store.set(false),
       };
+      window.__DSH_CMDK__ = api;
+      function onProvider(event) {
+        if (event && event.detail) registerProvider(event.detail);
+      }
+      window.addEventListener('dsh-cmdk:provider', onProvider);
       window.__DSH_CMDK__ = api;
       function onExternal(event) {
         if (event && event.detail) registerCommand(event.detail);
@@ -2287,6 +2941,7 @@ window.__ModuleLoader__.load({
         if (hotkey) window.removeEventListener('keydown', onKey, true);
         hotkey = false;
         window.removeEventListener('dsh-cmdk:command', onExternal);
+        window.removeEventListener('dsh-cmdk:provider', onProvider);
         if (window.__DSH_CMDK__ === api) delete window.__DSH_CMDK__;
       };
     }

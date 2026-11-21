@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "⌘K Command Palette",
-    "description": "One shortcut to any session: search titles and message content, switch workspaces, start a new session or theme — without touching the mouse."
+    "description": "One shortcut to any session: title and full-text search with message-level jumps, mode prefixes, a calculator, workspaces and themes — plus a provider API for plugins."
   }
 }

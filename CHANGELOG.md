@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0 — 2026-11-21
+
+### 新增
+
+- **扩展协议 v2：`registerProvider`**。一个 provider 可以同时贡献静态命令与异步搜索结果，带 `prefix` 专属模式、`icon`、`keywords`、`badge`、`score`、`actions`、`preview` 与 `dispose` 生命周期。`search(query, { signal, limit })` 超过 150 ms 未返回就丢弃本次结果，抛错只影响该 provider，面板其余结果照常显示；输入变化时上一次请求会被 `abort`。同 `id` 后注册者覆盖前者。`window.__DSH_CMDK__` 现在 `version: 2`，同时保留 v1 的 `register` / `unregister`。
+- **模式前缀**：`>` 命令、`@` 会话、`#` 工作区、`/` 会话与工作区、`=` 计算器、`?` 帮助。首字符决定列表构成，其余照常输入。
+- **计算器**：`= 1+2*3`，字符白名单 + `Function` 求值，回车复制结果；可在命令里关掉。
+- **帮助页**：`?` 列出键位、模式与每个 provider 贡献的命令数、当前版本。
+- **正文命中定位到消息**：宿主优先用 `sessionQuery.searchSessions({query,limit})`，返回的 `bestMatch.seq` 一起下发给客户端。命中项因此多了四个动作——「从这条消息 Fork」（`sessions.fork({ atSeq })`）、「复制片段」、「就此追问」（新建会话并预填引用）、「查看上下文」（`readEvent` 取前后各 2 条）。
+- **配置**：`localStorage["dsh-cmdk/config"]` 存 `contentDepth`（4–200，默认 40）、`calc`、`frecency`；面板内「搜索深度」「计算器」「最近使用」三个命令直接改，不用手写。
+- **字号命令**：放大 / 缩小 / 重置正文（10–22 px，走 `theme.setFontSize('text', px)`），当前值记在 `localStorage["dsh-cmdk/font-text"]`。
+- 新路由 `GET /cmdk/message?sessionId=&seq=&before=&after=`：取某条消息前后的窗口，供"查看上下文"用。
+
+### 改进
+
+- 正文搜索从「只扫最近 12 个会话」改为**索引优先 + 可调深度回退**：索引用 `searchSessions`，索引为空（有些机器上原生搜索本来就是空的）才回退 `filterEvents` 扫描，扫多少个会话由请求里的 `depth` 决定，默认 40、上限 200。返回里用 `via: 'index' | 'scan'` 标明来源。
+- `buildRoot` 现在按模式裁剪分组：`@` 模式下不再混入动作与主题，`#` 模式下不再列会话。
+- 空查询下的「最近使用」带可以整组关闭（`frecency: false`），关掉后列表保持稳定顺序。
+- 语言包对齐：zh / en 各 106 个键，缺失键与单侧键为零。
+
+### 修复
+
+- `registerProvider` 传入空 `commands` 且没有 `search` 时直接拒绝，不会在帮助页留下一个空壳 provider。
+
 ## 0.3.3 — 2026-11-09
 
 ### 修复

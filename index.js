@@ -7,6 +7,7 @@
  *
  *   GET  /cmdk/info           → where this profile lives (home + profile dir)
  *   GET  /cmdk/sessions?q=    → full session catalogue + message-content hits
+ *   GET  /cmdk/message        → the turns around one message (seq) of a session
  *   POST /cmdk/open-profile   → reveal the profile directory in Finder/Explorer
  *   GET  /cmdk/plugins        → installed bundles (name, version, enabled, dir)
  *   POST /cmdk/plugin         → enable/disable one bundle via pluginManager
@@ -28,7 +29,8 @@ const ROUTE = '/cmdk';
 const CATALOG_TTL = 20_000;
 const CATALOG_SIZE = 120;
 /** How many of the newest sessions the content scan looks at per query. */
-const CONTENT_SCAN_SIZE = 12;
+const DEFAULT_DEPTH = 40;
+const MAX_DEPTH = 200;
 
 let catalogCache = { at: 0, items: [] };
 /** Query → content hits, so held-down keys do not rescan the logs every 180 ms. */
@@ -176,39 +178,88 @@ async function sessionCatalog(ctx) {
  * the newest sessions and uses the backend-independent `filterEvents` text
  * predicate instead: no index required, just the session logs.
  */
-async function matchContent(ctx, text, limit) {
+async function matchContent(ctx, text, limit, depth) {
   const query = ctx.get('sessionQuery');
-  if (!query || typeof query.filterEvents !== 'function') return [];
-  if (text.length < 2) return [];
+  if (!query || text.length < 2) return [];
 
-  const cached = contentCache.get(text);
+  const scanSize = Math.max(4, Math.min(MAX_DEPTH, Number(depth) || DEFAULT_DEPTH));
+  const key = text + '\u0000' + String(scanSize);
+  const cached = contentCache.get(key);
   if (cached && Date.now() - cached.at < CONTENT_TTL) return cached.items.slice(0, limit);
-  const catalog = await sessionCatalog(ctx);
-  const scan = catalog.slice(0, CONTENT_SCAN_SIZE);
 
-  const hits = [];
-  for (const item of scan) {
-    let documents = [];
+  let hits = [];
+
+  // Indexed search first: it reports the seq of the matching message, so the
+  // palette can jump to that turn instead of dumping you at the session top.
+  if (typeof query.searchSessions === 'function') {
     try {
-      documents = await query.filterEvents(item.sessionId, [{ kind: 'text', text }]);
+      const page = await query.searchSessions({ query: text, limit });
+      const rows = Array.isArray(page && page.items) ? page.items : [];
+      const catalog = await sessionCatalog(ctx);
+      const titles = new Map(catalog.map((item) => [item.sessionId, item.title]));
+      hits = rows
+        .map((row) => {
+          const sessionId = idOf(row);
+          const header = row && row.header ? row.header : {};
+          const match = row && row.bestMatch ? row.bestMatch : null;
+          return {
+            sessionId,
+            title: titles.get(sessionId) || '',
+            cwd: header.cwd || '',
+            at: header.createdAt || 0,
+            seq: match && Number.isFinite(match.seq) ? match.seq : null,
+            snippet: match && typeof match.snippet === 'string' ? match.snippet : '',
+            via: 'index',
+          };
+        })
+        .filter((item) => item.sessionId);
     } catch {
-      continue;
+      hits = [];
     }
-    if (!Array.isArray(documents) || !documents.length) continue;
-    const doc = documents.find((entry) => entry && typeof entry.text === 'string');
-    if (!doc) continue;
-    hits.push({
-      sessionId: item.sessionId,
-      title: item.title,
-      cwd: item.cwd,
-      at: item.at,
-      snippet: snippetAround(doc.text, text),
-    });
-    if (hits.length >= limit) break;
   }
+
+  // Fallback: the full-text index can be empty in the wild, so walk the newest
+  // sessions with the backend-independent text predicate. `depth` decides how
+  // far back this goes; it is the one knob behind the "search depth" setting.
+  if (!hits.length && typeof query.filterEvents === 'function') {
+    const catalog = await sessionCatalog(ctx);
+    const scan = catalog.slice(0, scanSize);
+    for (const item of scan) {
+      let documents = [];
+      try {
+        documents = await query.filterEvents(item.sessionId, [{ kind: 'text', text }]);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(documents) || !documents.length) continue;
+      const doc = documents.find((entry) => entry && typeof entry.text === 'string');
+      if (!doc) continue;
+      hits.push({
+        sessionId: item.sessionId,
+        title: item.title,
+        cwd: item.cwd,
+        at: item.at,
+        seq: Number.isFinite(doc.seq) ? doc.seq : null,
+        snippet: snippetAround(doc.text, text),
+        via: 'scan',
+      });
+      if (hits.length >= limit) break;
+    }
+  }
+
   if (contentCache.size > 40) contentCache.clear();
-  contentCache.set(text, { at: Date.now(), items: hits });
+  contentCache.set(key, { at: Date.now(), items: hits });
   return hits;
+}
+
+/** Best-effort text of one session event: the payload may nest it. */
+function eventText(event) {
+  if (!event || typeof event !== 'object') return '';
+  const payload = event.payload && typeof event.payload === 'object' ? event.payload : event;
+  for (const value of [payload.text, event.text]) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return '';
 }
 
 /** 40 chars either side of the match, whitespace collapsed. */
@@ -296,6 +347,7 @@ export function apply(ctx, config) {
         const text = (url.searchParams.get('q') || '').trim();
         const asked = Number(url.searchParams.get('limit'));
         const limit = Number.isFinite(asked) && asked > 0 ? Math.min(asked, 50) : 20;
+        const depth = Number(url.searchParams.get('depth'));
 
         try {
           const catalog = await sessionCatalog(ctx);
@@ -305,8 +357,68 @@ export function apply(ctx, config) {
           }
           // The client filters titles locally (fuzzy + pinyin); the Host only
           // contributes the expensive part: message-content hits.
-          const hits = await matchContent(ctx, text, limit);
+          const hits = await matchContent(ctx, text, limit, depth);
           sendJson(res, 200, { ok: true, items: catalog, hits, total: catalog.length });
+        } catch (error) {
+          sendJson(res, 500, { ok: false, error: String((error && error.message) || error) });
+        }
+      },
+    }),
+  );
+
+  // The turns around one message. Feeds the "preview" action on a content hit.
+  disposers.push(
+    server.register({
+      kind: 'exact',
+      path: ROUTE + '/message',
+      handler: async (req, res) => {
+        if (refused(ctx, req, res)) return;
+        let url;
+        try {
+          url = new URL(req.url || ROUTE, 'http://localhost');
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'bad url' });
+          return;
+        }
+        const sessionId = url.searchParams.get('sessionId') || '';
+        // `Number(null)` is 0, so an absent param must be rejected explicitly.
+        const rawSeq = url.searchParams.get('seq');
+        const seq = rawSeq === null || rawSeq === '' ? NaN : Number(rawSeq);
+        if (!sessionId || !Number.isFinite(seq)) {
+          sendJson(res, 400, { ok: false, error: 'sessionId and seq are required' });
+          return;
+        }
+        const query = ctx.get('sessionQuery');
+        if (!query || typeof query.readEvent !== 'function') {
+          sendJson(res, 503, { ok: false, error: 'sessionQuery unavailable' });
+          return;
+        }
+        const windowSize = (name) => {
+          const raw = url.searchParams.get(name);
+          if (raw === null || raw === '') return 2;
+          const value = Number(raw);
+          return Number.isFinite(value) ? Math.min(Math.max(Math.trunc(value), 0), 10) : 2;
+        };
+        try {
+          const frame = await query.readEvent({
+            sessionId,
+            seq,
+            before: windowSize('before'),
+            after: windowSize('after'),
+          });
+          const events = Array.isArray(frame && frame.events) ? frame.events : [];
+          sendJson(res, 200, {
+            ok: true,
+            startSeq: frame && frame.startSeq,
+            endSeq: frame && frame.endSeq,
+            around: events
+              .map((event) => ({
+                seq: Number.isFinite(event && event.seq) ? event.seq : null,
+                kind: event && event.kind ? String(event.kind) : '',
+                text: eventText(event).slice(0, 1200),
+              }))
+              .filter((row) => row.text),
+          });
         } catch (error) {
           sendJson(res, 500, { ok: false, error: String((error && error.message) || error) });
         }
