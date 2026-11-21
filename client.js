@@ -199,6 +199,16 @@ window.__ModuleLoader__.load({
         ctxWindowSub: '前后各 {n} 条',
         ctxClipped: '已截断，打开会话看全文',
         ctxJump: '从这条打开会话',
+        jumpHere: 'Jump to message',
+        jumpHereHint: 'Open the session and scroll to this message',
+        jumpTrying: 'Looking for that message…',
+        jumpNoSnippet: 'This hit has no snippet to locate',
+        jumpMiss: 'That message is outside the loaded range — use Fork from here instead',
+        jumpMiss: '这条消息不在已加载的范围里，改用「从这条 Fork」继续',
+        jumpHere: '跳到那条',
+        jumpHereHint: '打开会话并滚到这条消息',
+        jumpTrying: '正在定位这条消息…',
+        jumpNoSnippet: '这条命中没有可定位的片段',
         ctxEmpty: '这一条没有可显示的文本',
         roleUser: '你',
         roleAssistant: '助手',
@@ -1143,8 +1153,14 @@ window.__ModuleLoader__.load({
     /** Query text of the current search, kept for in-panel highlighting. */
     var lastNeedle = '';
 
+    /** Set while the palette is mounted; lets a DOM jump report a late miss. */
+    var statusSink = null;
+
     /** Context window sizes the panel cycles through with `←` / `→`. */
     var CTX_SIZES = [2, 5, 10];
+    // An empty query is for browsing recent work, so the first screen carries
+    // enough sessions to scan without typing; typing still searches everything.
+    var EMPTY_SESSION_LIMIT = 12;
 
     function roleLabel(lang, type) {
       var t = copy(lang);
@@ -1250,12 +1266,6 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // Lifetime of the context panel: how many messages sit on each side.
-    var CTX_SIZES = [2, 5, 10];
-
-    // Last plain query text, kept module-level so panels (which never see the
-    // input field) can still highlight what the user typed.
-    var lastNeedle = '';
 
     function roleLabel(lang, type) {
       var t = copy(lang);
@@ -1358,6 +1368,84 @@ window.__ModuleLoader__.load({
       });
     }
 
+    // The host exposes no scroll or anchor API for a session view, so getting to
+    // a matched message is best effort: open the session, then look for the
+    // snippet inside the conversation scroller and blink it. When that fails the
+    // same row still offers Fork-from-here, which needs no DOM at all.
+    var JUMP_INTERVAL = 140;
+    var JUMP_TRIES = 26;
+
+    function jumpProbe(snippet) {
+      if (typeof snippet !== 'string' || !snippet) return '';
+      return snippet.replace(/\s+/g, ' ').trim().slice(0, 32);
+    }
+
+    function jumpFindNode(probe) {
+      if (typeof document === 'undefined' || !document.querySelector || !document.createTreeWalker) return null;
+      var scroller = null;
+      try {
+        scroller = document.querySelector('[data-conversation-scroll]');
+      } catch (error) {
+        scroller = null;
+      }
+      if (!scroller) return null;
+      var walker = document.createTreeWalker(scroller, 4);
+      var guard = 0;
+      var node = walker.nextNode();
+      while (node && guard < 6000) {
+        guard += 1;
+        var flat = String(node.nodeValue || '').replace(/\s+/g, ' ');
+        if (flat.length >= 12 && flat.indexOf(probe) >= 0) return node.parentElement || null;
+        node = walker.nextNode();
+      }
+      return null;
+    }
+
+    function jumpBlink(node) {
+      if (!node) return;
+      try {
+        node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (error) {
+        try {
+          node.scrollIntoView();
+        } catch (ignored) {
+          return;
+        }
+      }
+      var style = node.style;
+      if (!style) return;
+      var savedOutline = style.outline;
+      var savedOffset = style.outlineOffset;
+      style.outline = '2px solid ' + C.brand;
+      style.outlineOffset = '6px';
+      setTimeout(function () {
+        style.outline = savedOutline || '';
+        style.outlineOffset = savedOffset || '';
+      }, 2200);
+    }
+
+    function jumpToMessage(ctx, lang, id, seq, snippet) {
+      var t = copy(lang);
+      ctx.uiWorkspace.openSession(id);
+      var probe = jumpProbe(snippet);
+      if (probe.length < 12) return { status: t.jumpNoSnippet };
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries += 1;
+        var node = jumpFindNode(probe);
+        if (node) {
+          clearInterval(timer);
+          jumpBlink(node);
+          return;
+        }
+        if (tries >= JUMP_TRIES) {
+          clearInterval(timer);
+          if (typeof statusSink === 'function') statusSink(t.jumpMiss);
+        }
+      }, JUMP_INTERVAL);
+      return { status: t.jumpTrying };
+    }
+
     function sessionActions(ctx, lang, entry) {
       var t = copy(lang);
       var id = entry.sessionId;
@@ -1375,6 +1463,9 @@ window.__ModuleLoader__.load({
               return { status: t.done };
             }),
           ),
+          item('action:jump', 'action', t.jumpHere, t.jumpHereHint, function () {
+            return jumpToMessage(ctx, lang, id, seq, snippet);
+          }),
         );
       }
       if (snippet) {
@@ -2205,7 +2296,7 @@ window.__ModuleLoader__.load({
       if (wantSession) {
         // Local-first: every catalogue row is fuzzy-matched in the browser, so
         // keystrokes never wait for the Host. Content hits arrive separately.
-        var requested = needle ? catalogRows : catalogRows.slice(0, 5);
+        var requested = needle ? catalogRows : catalogRows.slice(0, EMPTY_SESSION_LIMIT);
         requested.forEach(function (entry) {
           var row = sessionItem(ctx, lang, entry, { snippets: config.snippets });
           if (needle && scoreOf(needle, row) <= 0) return;
@@ -2834,6 +2925,7 @@ window.__ModuleLoader__.load({
       var providerList = useProviders();
       var parsed = parseQuery(query);
       lastNeedle = parsed.text;
+      statusSink = setStatus;
 
       // The host owns the real version; the constant is only a fallback for
       // the frame before /info answers (or when the route is unreachable).

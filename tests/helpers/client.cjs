@@ -71,10 +71,12 @@ function loadClient(names, options) {
 
   const sandbox = {
     window: win,
-    document: {
+    document: opts.document || {
       createElement: () => ({ style: {}, setAttribute() {}, appendChild() {} }),
       documentElement: { style: { setProperty() {} } },
       body: {},
+      querySelector: () => null,
+      createTreeWalker: () => ({ nextNode: () => null }),
     },
     navigator: {
       platform: opts.platform || 'MacIntel',
@@ -85,8 +87,10 @@ function loadClient(names, options) {
       requests.push(String(url));
       return fetchImpl(String(url), init);
     },
-    setTimeout,
+    setTimeout: opts.setTimeout || setTimeout,
     clearTimeout,
+    setInterval: opts.setInterval || setInterval,
+    clearInterval: opts.clearInterval || clearInterval,
     AbortController,
     URL,
     console,
@@ -109,6 +113,7 @@ function loadClient(names, options) {
     storage,
     requests,
     window: win,
+    document: sandbox.document,
   };
 }
 
