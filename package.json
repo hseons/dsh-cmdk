@@ -1,6 +1,6 @@
 {
   "name": "dsh-cmdk",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "type": "module",
   "scripts": {
     "test": "node tests/run.cjs",
@@ -14,6 +14,7 @@
   "description": "⌘K command palette for DeepSeek Harness: search sessions and message content (with message-level jumps), run commands, extend via providers.",
   "icon": "icon.svg",
   "keywords": [
+    "dsh-plugin",
     "dsh",
     "command-palette",
     "search",
@@ -32,8 +33,6 @@
     "CHANGELOG.md",
     "LICENSE",
     "screenshot.png",
-    "screenshot-actions.png",
-    "screenshot-ext.png",
     "index.js",
     "client.js",
     "cordis.patch.yml",

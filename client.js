@@ -56,6 +56,7 @@ window.__ModuleLoader__.load({
         hintSelect: '选择',
         hintOpen: '打开',
         hintActions: '更多',
+        hintJump: '直达',
         hintRun: '执行',
         hintBack: '返回',
         hintClose: '关闭',
@@ -253,6 +254,7 @@ window.__ModuleLoader__.load({
         hintSelect: 'select',
         hintOpen: 'open',
         hintActions: 'more',
+        hintJump: 'jump',
         hintRun: 'run',
         hintBack: 'back',
         hintClose: 'close',
@@ -2429,6 +2431,54 @@ window.__ModuleLoader__.load({
       x: [['path', { d: 'M18 6 6 18M6 6l12 12' }]],
     };
 
+    /**
+     * One hue per group. These are accents, not surfaces: they have to stay
+     * legible on both the light and the dark overlay, so they sit at middle
+     * saturation and are only ever used at low percentages for fills.
+     */
+    var GROUP_TINTS = {
+      recent: '#f59e0b',
+      session: '#6366f1',
+      workspace: '#0ea5e9',
+      plugin: '#8b5cf6',
+      action: '#10b981',
+      theme: '#ec4899',
+      system: '#64748b',
+      ext: '#f97316',
+      setSearch: '#6366f1',
+      setBehavior: '#10b981',
+      setLook: '#ec4899',
+      setKeys: '#f59e0b',
+      setMaint: '#64748b',
+      file: '#0ea5e9',
+      help: '#8b5cf6',
+      calc: '#14b8a6',
+    };
+
+    function tintOf(entry) {
+      if (!entry) return GROUP_TINTS.action;
+      var key = String(entry.key || '');
+      if (key.indexOf('ctx:') === 0) return GROUP_TINTS.session;
+      if (key.indexOf('theme:') === 0 || key.indexOf('lang:') === 0) return GROUP_TINTS.theme;
+      if (key.indexOf('session:') === 0) return GROUP_TINTS.session;
+      if (key.indexOf('workspace:') === 0) return GROUP_TINTS.workspace;
+      if (key.indexOf('plugin:') === 0) return GROUP_TINTS.plugin;
+      if (key.indexOf('ext:') === 0 || key.indexOf('docs:') === 0) return GROUP_TINTS.ext;
+      if (key.indexOf('calc:') === 0) return GROUP_TINTS.calc;
+      if (key.indexOf('help:') === 0) return GROUP_TINTS.help;
+      return GROUP_TINTS[entry.group] || GROUP_TINTS.action;
+    }
+
+    function modeTint(mode) {
+      if (mode === 'command') return GROUP_TINTS.action;
+      if (mode === 'session') return GROUP_TINTS.session;
+      if (mode === 'workspace') return GROUP_TINTS.workspace;
+      if (mode === 'file') return GROUP_TINTS.file;
+      if (mode === 'calc') return GROUP_TINTS.calc;
+      if (mode === 'help') return GROUP_TINTS.help;
+      return C.brand;
+    }
+
     function Icon(props) {
       var paint = ICONS[props.name] || ICONS.action;
       var size = props.size || 16;
@@ -2534,6 +2584,7 @@ window.__ModuleLoader__.load({
 
     function IconTile(props) {
       var active = props.active;
+      var tint = props.tint || C.brand;
       return h(
         'span',
         {
@@ -2545,11 +2596,12 @@ window.__ModuleLoader__.load({
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            borderRadius: 8,
-            color: active ? C.brand : C.sub,
-            background: active ? mix(C.brand, 13) : mix(C.layerAlt, 76),
-            border: '1px solid ' + (active ? mix(C.brand, 24) : mix(C.line, 70)),
-            transition: 'background 120ms ease, color 120ms ease, border-color 120ms ease',
+            borderRadius: 9,
+            color: active ? tint : mix(tint, 72, C.sub),
+            background: mix(tint, active ? 18 : 9, C.layerAlt),
+            border: '1px solid ' + mix(tint, active ? 34 : 15),
+            boxShadow: active ? '0 2px 8px ' + mix(tint, 18) : 'none',
+            transition: 'background 130ms ease, color 130ms ease, border-color 130ms ease, box-shadow 130ms ease',
           },
         },
         h(Icon, { name: props.name, size: 15 }),
@@ -2582,6 +2634,7 @@ window.__ModuleLoader__.load({
 
     var PANEL_CSS = [
       '@keyframes dsh-cmdk-in{from{opacity:0;transform:translateY(-10px) scale(.985)}to{opacity:1;transform:none}}',
+      '@keyframes dsh-cmdk-row{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}',
       '@keyframes dsh-cmdk-fade{from{opacity:0}}',
       '@keyframes dsh-cmdk-shimmer{0%{background-position:-240px 0}100%{background-position:240px 0}}',
       '@keyframes dsh-cmdk-spin{to{transform:rotate(360deg)}}',
@@ -2593,7 +2646,7 @@ window.__ModuleLoader__.load({
       '.dsh-cmdk-scroll::-webkit-scrollbar-track{background:transparent}',
       '.dsh-cmdk-scroll::-webkit-scrollbar-thumb{background:' + mix(C.sub, 26) + ';border-radius:999px;border:3px solid transparent;background-clip:content-box}',
       '.dsh-cmdk-scroll::-webkit-scrollbar-thumb:hover{background:' + mix(C.sub, 44) + ';border:3px solid transparent;background-clip:content-box}',
-      '@media (prefers-reduced-motion:reduce){.dsh-cmdk-panel,.dsh-cmdk-scrim{animation:none!important}.dsh-cmdk-panel *{transition:none!important}.dsh-cmdk-shimmer{animation:none!important}}',
+      '@media (prefers-reduced-motion:reduce){.dsh-cmdk-panel,.dsh-cmdk-scrim{animation:none!important}.dsh-cmdk-panel *{transition:none!important;animation:none!important}.dsh-cmdk-shimmer{animation:none!important}}',
     ].join('');
 
     function Hints(props) {
@@ -2759,7 +2812,7 @@ window.__ModuleLoader__.load({
       var [status, setStatus] = useState(null);
       var [busy, setBusy] = useState(false);
       var [focused, setFocused] = useState(false);
-      var [canFade, setCanFade] = useState(false);
+      var [canFade, setCanFade] = useState('none');
       var inputRef = useRef(null);
       var listRef = useRef(null);
       var [workspaces, setWorkspaces] = useState([]);
@@ -3033,7 +3086,17 @@ window.__ModuleLoader__.load({
       function syncScrollFade() {
         var node = listRef.current;
         if (!node) return;
-        setCanFade(node.scrollHeight - node.scrollTop - node.clientHeight > 4);
+        var top = node.scrollTop > 4;
+        var bottom = node.scrollHeight - node.scrollTop - node.clientHeight > 4;
+        var next = 'none';
+        if (top && bottom) {
+          next = 'linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 18px), transparent)';
+        } else if (top) {
+          next = 'linear-gradient(to bottom, transparent 0, #000 16px)';
+        } else if (bottom) {
+          next = 'linear-gradient(to bottom, #000 calc(100% - 18px), transparent)';
+        }
+        setCanFade((prev) => (prev === next ? prev : next));
       }
 
       // Keep the highlighted row inside the viewport when the keyboard moves it.
@@ -3228,6 +3291,32 @@ window.__ModuleLoader__.load({
           setStatus(t.setHotkeyDone + ' · ' + hotkeyLabel(combo));
           return;
         }
+        // ⌘1..⌘9 runs the nth row without moving the selection first — the fast
+        // path for the two or three rows anyone actually repeats.
+        if ((event.metaKey || event.ctrlKey) && !event.altKey && /^[1-9]$/.test(event.key)) {
+          var picked = items[Number(event.key) - 1];
+          if (picked) {
+            event.preventDefault();
+            event.stopPropagation();
+            setIndex(Number(event.key) - 1);
+            run(picked);
+          }
+          return;
+        }
+        // ⌘↑ / ⌘↓ jump a whole group instead of one row.
+        if ((event.metaKey || event.ctrlKey) && (event.key === 'ArrowDown' || event.key === 'ArrowUp') && items.length > 1) {
+          event.preventDefault();
+          event.stopPropagation();
+          var jump = event.key === 'ArrowDown' ? 1 : -1;
+          var fromGroup = items[active] ? items[active].group : null;
+          var landing = active;
+          for (var hop = 0; hop < items.length; hop += 1) {
+            landing = (landing + jump + items.length) % items.length;
+            if (items[landing].group !== fromGroup) break;
+          }
+          setIndex(landing);
+          return;
+        }
         if (event.key === 'Escape') {
           event.preventDefault();
           event.stopPropagation();
@@ -3343,8 +3432,11 @@ window.__ModuleLoader__.load({
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 gap: 8,
-                padding: '11px 10px 5px',
-                background: C.overlay,
+                padding: '12px 10px 6px',
+                background: mix(C.overlay, 88),
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                boxShadow: 'inset 0 -1px 0 ' + mix(C.lineStrong, 30),
               },
             },
             h(
@@ -3364,9 +3456,14 @@ window.__ModuleLoader__.load({
               'span',
               {
                 style: {
-                  fontSize: 10.5,
+                  fontSize: 10,
+                  fontWeight: 600,
                   fontVariantNumeric: 'tabular-nums',
-                  color: mix(C.sub, 72),
+                  color: mix(C.sub, 78),
+                  padding: '1px 6px',
+                  borderRadius: 999,
+                  background: mix(C.sub, 9),
+                  boxShadow: 'inset 0 0 0 1px ' + mix(C.sub, 12),
                 },
               },
               counts[section.group],
@@ -3479,7 +3576,11 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: { flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10 } },
-            h(IconTile, { name: iconForGroup(current.group || 'action'), active: true }),
+            h(IconTile, {
+              name: iconForGroup(current.group || 'action'),
+              active: true,
+              tint: tintOf({ key: '', group: current.group || 'action' }),
+            }),
             h(
               'span',
               {
@@ -3534,7 +3635,30 @@ window.__ModuleLoader__.load({
                   },
                   h(Icon, { name: 'back', size: 16 }),
                 )
-              : h(Icon, { name: 'search', size: 17 }),
+              : parsed.mode === 'all'
+                ? h(Icon, { name: 'search', size: 17 })
+                : h(
+                    'span',
+                    {
+                      style: {
+                        flex: '0 0 auto',
+                        minWidth: 22,
+                        height: 22,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '0 4px',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        color: modeTint(parsed.mode),
+                        background: mix(modeTint(parsed.mode), 15, C.layerAlt),
+                        boxShadow: 'inset 0 0 0 1px ' + mix(modeTint(parsed.mode), 28),
+                      },
+                    },
+                    parsed.prefix,
+                  ),
             h('input', {
               ref: inputRef,
               value: query,
@@ -3672,6 +3796,7 @@ window.__ModuleLoader__.load({
             ['↑↓', t.hintSelect],
             ['↵', t.hintOpen],
             ['→', t.hintActions],
+            ['⌘1–9', t.hintJump],
             ['esc', t.hintClose],
           ];
         }
@@ -3772,12 +3897,8 @@ window.__ModuleLoader__.load({
                 flex: 1,
                 minHeight: 0,
                 padding: '4px 8px 10px',
-                WebkitMaskImage: canFade
-                  ? 'linear-gradient(to bottom, #000 calc(100% - 26px), transparent)'
-                  : undefined,
-                maskImage: canFade
-                  ? 'linear-gradient(to bottom, #000 calc(100% - 26px), transparent)'
-                  : undefined,
+                WebkitMaskImage: canFade === 'none' ? undefined : canFade,
+                maskImage: canFade === 'none' ? undefined : canFade,
               },
             },
             input
@@ -3846,6 +3967,7 @@ window.__ModuleLoader__.load({
     }
 
     function renderRow(entry, active, onRun, onActions, onHover, position, moreLabel, query) {
+      var tint = tintOf(entry);
       return h(
         'div',
         {
@@ -3857,6 +3979,7 @@ window.__ModuleLoader__.load({
           onMouseEnter: onHover,
           onDoubleClick: onActions,
           style: {
+            position: 'relative',
             display: 'flex',
             alignItems: entry.body ? 'flex-start' : 'center',
             gap: 11,
@@ -3866,13 +3989,29 @@ window.__ModuleLoader__.load({
             cursor: 'pointer',
             scrollMarginTop: 30,
             scrollMarginBottom: 30,
-            background: active ? mix(C.brand, 11, C.layerAlt) : 'transparent',
-            boxShadow: active ? 'inset 0 0 0 1px ' + mix(C.brand, 20) : 'none',
+            background: active ? mix(tint, 10, C.layerAlt) : 'transparent',
+            boxShadow: active ? 'inset 0 0 0 1px ' + mix(tint, 20) : 'none',
+            animation: 'dsh-cmdk-row 150ms ease both',
+            animationDelay: Math.min(position, 10) * 11 + 'ms',
             transition: 'background 110ms ease, box-shadow 110ms ease',
             outline: 'none',
           },
         },
-        h(IconTile, { name: iconForEntry(entry), active: active, dot: entry.dot }),
+        active
+          ? h('span', {
+              style: {
+                position: 'absolute',
+                left: 0,
+                top: 7,
+                bottom: 7,
+                width: 2.5,
+                borderRadius: 2,
+                background: tint,
+                boxShadow: '0 0 8px ' + mix(tint, 55),
+              },
+            })
+          : null,
+        h(IconTile, { name: iconForEntry(entry), active: active, dot: entry.dot, tint: tint }),
         h(
           'div',
           { style: { minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 } },
