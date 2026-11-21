@@ -206,6 +206,20 @@ window.__ModuleLoader__.load({
         moreHits: '加载更多结果',
         moreHitsSub: '接着取下一页命中',
         moreEnd: '没有更多了',
+        moreCommands: '更多命令',
+        moreCommandsSub: '{n} 项命令与设置',
+        moreWorkspaces: '切换工作区',
+        moreWorkspacesSub: '{n} 个工作区',
+        relNow: '刚刚',
+        relMin: '{n} 分钟前',
+        relHour: '{n} 小时前',
+        relDay: '昨天',
+        relDays: '{n} 天前',
+        usageTitle: '使用统计',
+        usageSub: '最常用的 {n} 项（只存在本机）',
+        usageOpen: '查看使用统计',
+        usageCount: '{n} 次',
+        usageEmpty: '还没有使用记录',
         extTitle: '扩展',
         extSub: '管理已注册的 provider',
         extEmpty: '还没有第三方 provider',
@@ -387,6 +401,20 @@ window.__ModuleLoader__.load({
         moreHits: 'Load more hits',
         moreHitsSub: 'Fetch the next page of matches',
         moreEnd: 'No more hits',
+        moreCommands: 'More commands',
+        moreCommandsSub: '{n} commands and settings',
+        moreWorkspaces: 'Switch workspace',
+        moreWorkspacesSub: '{n} workspaces',
+        relNow: 'just now',
+        relMin: '{n}m ago',
+        relHour: '{n}h ago',
+        relDay: 'yesterday',
+        relDays: '{n}d ago',
+        usageTitle: 'Usage',
+        usageSub: 'Top {n} by usage, local only',
+        usageOpen: 'Show usage stats',
+        usageCount: '{n}×',
+        usageEmpty: 'Nothing recorded yet',
         extTitle: 'Extensions',
         extSub: 'Manage registered providers',
         extEmpty: 'No third-party providers yet',
@@ -989,6 +1017,26 @@ window.__ModuleLoader__.load({
       return count * Math.pow(0.5, ageDays / 7);
     }
 
+    /** Coarse relative stamp for session rows — "12 分钟前" beats a bare path. */
+    function relativeTime(lang, ms) {
+      if (!ms || !Number.isFinite(ms)) return '';
+      var t = STRINGS[lang] || STRINGS.zh;
+      var diff = Math.max(0, Date.now() - ms);
+      var minutes = Math.floor(diff / 60000);
+      if (minutes < 1) return t.relNow;
+      if (minutes < 60) return t.relMin.replace('{n}', String(minutes));
+      var hours = Math.floor(minutes / 60);
+      if (hours < 24) return t.relHour.replace('{n}', String(hours));
+      if (hours < 48) return t.relDay;
+      var days = Math.floor(hours / 24);
+      if (days < 30) return t.relDays.replace('{n}', String(days));
+      try {
+        return new Date(ms).toLocaleDateString(lang === 'en' ? 'en' : 'zh-CN', { month: 'short', day: 'numeric' });
+      } catch {
+        return '';
+      }
+    }
+
     // ---------------------------------------------------------------------
     // item helpers
     // ---------------------------------------------------------------------
@@ -1033,7 +1081,9 @@ window.__ModuleLoader__.load({
       };
       var actions = () => sessionActions(ctx, lang, entry);
       var snippet = options && options.snippets === false ? '' : entry.snippet;
-      var sub = snippet || shortPath(entry.cwd);
+      var stamp = relativeTime(lang, entry.at);
+      var here = shortPath(entry.cwd);
+      var sub = snippet || (stamp && here ? stamp + ' · ' + here : stamp || here);
       if (seq !== null && snippet) {
         sub = t.hitAt.replace('{n}', String(seq)) + ' · ' + snippet;
       }
@@ -1836,6 +1886,16 @@ window.__ModuleLoader__.load({
         item('help:keys', 'system', t.helpKeys, t.helpKeysSub, () => undefined),
         item('help:modes', 'system', t.helpModes, t.helpModesSub, () => undefined),
       ];
+      rows.push(
+        item('help:usage', 'system', t.usageOpen, t.usageSub.replace('{n}', '12'), () => ({
+          push: {
+            title: t.usageTitle,
+            items: function () {
+              return buildUsage(lang);
+            },
+          },
+        })),
+      );
       if (!providerRows.length) {
         rows.push(item('help:no-provider', 'system', t.helpNoProviders, '', () => undefined));
       } else {
@@ -2060,6 +2120,29 @@ window.__ModuleLoader__.load({
       return rows.filter((row) => scoreOf(needle, row) > 0);
     }
 
+    // Groups that belong on the first screen: where you were, where you can go.
+    var PRIMARY_GROUPS = { recent: true, session: true, workspace: true };
+    var PRIMARY_KEYS = { 'cmd:new': true, 'cmd:sessions': true };
+
+    /** Usage stats read straight out of the frecency table — no telemetry. */
+    function buildUsage(lang) {
+      var t = STRINGS[lang] || STRINGS.zh;
+      var map = readRecent();
+      var now = Date.now();
+      var rows = Object.keys(map)
+        .map((key) => ({ key: key, hit: map[key] }))
+        .filter((entry) => entry.hit && (entry.hit.at || entry.hit.count))
+        .sort((a, b) => frecency(b.hit, now) - frecency(a.hit, now))
+        .slice(0, 12);
+      if (!rows.length) return [item('usage:empty', 'system', t.usageEmpty, '', null)];
+      return rows.map((entry) => {
+        var count = entry.hit.count || 0;
+        var when = relativeTime(lang, entry.hit.at);
+        var sub = t.usageCount.replace('{n}', String(count)) + (when ? ' · ' + when : '');
+        return item('usage:' + entry.key, 'system', entry.key, sub, null, null, { badge: String(count) });
+      });
+    }
+
     function buildRoot(ctx, lang, query, catalog, hits, workspaces, recent, plugins, ext, reloadPlugins, extra) {
       var t = copy(lang);
       var items = [];
@@ -2181,17 +2264,57 @@ window.__ModuleLoader__.load({
 
       if (!needle) {
         if (!useFrecency) return items;
-        // a short "recent" band on top, then the natural groups
-        var ranked = items
+        // The first screen is the one people hit twenty times a day: what they
+        // were just in, then where they could go. Settings, themes and plugin
+        // commands are once-a-month things and get folded into one row.
+        var primary = [];
+        var parked = [];
+        items.forEach((entry) => {
+          if (PRIMARY_GROUPS[entry.group] || PRIMARY_KEYS[entry.key]) primary.push(entry);
+          else parked.push(entry);
+        });
+        var ranked = primary
           .map((entry) => ({ entry: entry, hit: recentMap[entry.key] }))
           .filter((row) => row.hit && (row.hit.at || row.hit.count))
           .sort((a, b) => frecency(b.hit, now) - frecency(a.hit, now))
-          .slice(0, 4)
+          .slice(0, 8)
           .map((row) => row.entry);
         var seen = new Set(ranked.map((entry) => entry.key));
-        return ranked
+        var list = ranked
           .map((entry) => Object.assign({}, entry, { group: 'recent' }))
-          .concat(items.filter((entry) => !seen.has(entry.key)));
+          .concat(primary.filter((entry) => !seen.has(entry.key)));
+        if (workspaceRows.length && mode === 'all') {
+          list.push(
+            item(
+              'more:workspace',
+              'action',
+              t.moreWorkspaces,
+              t.moreWorkspacesSub.replace('{n}', String(workspaceRows.length)),
+              () => ({
+                push: {
+                  title: t.moreWorkspaces,
+                  items: workspaceRows.map((workspace) => workspaceItem(ctx, lang, workspace)),
+                },
+              }),
+              null,
+              { badge: String(workspaceRows.length) },
+            ),
+          );
+        }
+        if (parked.length) {
+          list.push(
+            item(
+              'more:all',
+              'action',
+              t.moreCommands,
+              t.moreCommandsSub.replace('{n}', String(parked.length)),
+              () => ({ push: { title: t.moreCommands, items: parked } }),
+              null,
+              { badge: String(parked.length) },
+            ),
+          );
+        }
+        return list;
       }
 
       var scored = [];
