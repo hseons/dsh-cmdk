@@ -1,5 +1,10 @@
 # dsh-cmdk — ⌘K 命令面板
 
+[![CI](https://github.com/hseons/dsh-cmdk/actions/workflows/ci.yml/badge.svg)](https://github.com/hseons/dsh-cmdk/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-cmdk.svg)](https://www.npmjs.com/package/dsh-cmdk)
+[![license](https://img.shields.io/npm/l/dsh-cmdk.svg)](LICENSE)
+[![node](https://img.shields.io/node/v/dsh-cmdk.svg)](package.json)
+
 会话 / 工作区 / 插件 / 动作 / 外观一个入口，正文搜索能定位到具体那条消息，插件可扩展。当前版本见 `package.json` 或面板里的 `?` 帮助页。
 
 一个快捷键跳到任何东西：会话、工作区、常用动作，还能对选中的会话直接做事。
@@ -269,6 +274,33 @@ dsh plugin add dsh-cmdk
 
 装完重启桌面 app（或刷新页面）拿到新的 client 模块。
 
+## 开发
+
+需要 Node 20 以上，没有依赖，也没有构建步骤。
+
+```bash
+npm run verify      # 语法检查 + 全部测试
+npm test            # 只跑测试
+npm run pack:check  # 看发布会带哪些文件
+```
+
+测试在 `tests/`，用 `vm` 把 `client.js` 装进一个假 React 环境里跑纯逻辑，不需要浏览器：
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `tests/search.test.cjs` | 打分、模式前缀、查询解析、面板路由 |
+| `tests/context.test.cjs` | 消息上下文面板、窗口档位 |
+| `tests/extensions.test.cjs` | provider 注册、扩展面板、启停 |
+| `tests/settings.test.cjs` | 设置行、开关、快捷键录制 |
+| `tests/first-screen.test.cjs` | 首屏折叠、相对时间、使用统计、加载更多 |
+| `tests/apply.test.cjs` | `window.__DSH_CMDK__` 对外的七个方法 |
+| `tests/host.test.mjs` | `/cmdk/*` 路由、会话索引、事件文本提取 |
+
+改 `client.js` 时注意：它是 ES5 写法（`var` + `function`），没有构建步骤，直接进页面。
+`STRINGS.zh` 与 `STRINGS.en` 的键必须一一对应。细节见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+CI 在 Node 20 / 22 / 24 上跑同样的三步：语法检查、测试、打包清单。
+
 ## 文件
 
 ```
@@ -277,11 +309,16 @@ cordis.patch.yml    # insert: dsh-cmdk
 CHANGELOG.md
 index.js            # Host：/cmdk/{info,sessions,message,workspaces,plugins,plugin,open-profile}
 client.js           # Client：shell.overlay 面板 + sidebar.footer.action 按钮
+tests/              # 纯 Node 测试，无需浏览器与依赖
 docs/upgrade-plan.md # 0.4 → 1.0 的路线与验收标准
 locale/zh.json      # meta.title / meta.description
 locale/en.json
 icon.svg
 ```
+
+## 贡献
+
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。安全相关请按 [SECURITY.md](SECURITY.md) 私下报告。
 
 ## License
 

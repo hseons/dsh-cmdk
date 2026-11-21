@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.0 — 2026-11-21
+
+这一版没有新功能，补的是工程地基：让「改坏了」能被发现。
+
+### 新增
+
+- **测试进仓库**：`tests/` 下 7 个文件、136 条断言，全部用 `vm` 加载 `client.js` 跑纯逻辑，
+  不需要浏览器、不需要依赖。覆盖打分与模式前缀、消息上下文窗口、provider 注册与扩展面板、
+  设置行与快捷键录制、首屏折叠与相对时间、`window.__DSH_CMDK__` 对外接口、`/cmdk/*` 路由。
+- **`npm test` / `npm run verify`**：前者只跑测试，后者连带 `node --check`；`npm run pack:check`
+  看发布清单。
+- **GitHub Actions**：Node 20 / 22 / 24 三档矩阵跑语法检查、测试、打包清单。
+- **CONTRIBUTING.md**：设计约束（无构建、无运行时依赖、client 端 ES5 写法、双语文案同步）、
+  测试约定、手工验证步骤、发版流程。
+- **SECURITY.md**：路由信任栅栏、第三方 provider 的信任边界、本地存储范围。
+- **Issue / PR 模板**：功能请求要填「多久用一次」，PR 模板带发布前检查表。
+- **`.editorconfig`**、`engines: node >= 20`。
+
+### 修复
+
+- `registerProvider` / `unregisterProvider` 之前用重新赋值的方式改列表，会让
+  `useProviders()` 与外部持有的数组引用失效；改为原地增删。
+- `buildRoot` 收到 `commands` 为数字的 provider（`listProviders()` 的返回形状）时会抛
+  `provider.commands.forEach is not a function`；改为先判数组。
+
 ## 0.8.0 — 2026-11-21
 
 ### 改进

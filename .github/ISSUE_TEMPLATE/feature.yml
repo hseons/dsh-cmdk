@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a new capability for the palette
+labels: [enhancement]
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: The scenario
+      description: What are you doing when the palette gets in the way? How often?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often would you use it?
+      options:
+        - Several times a day
+        - A few times a week
+        - A few times a month
+        - Rarely / once
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        Features are ranked by how often they get used, not by how interesting they are to build.
