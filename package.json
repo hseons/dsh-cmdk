@@ -1,6 +1,6 @@
 {
   "name": "dsh-cmdk",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "description": "⌘K command palette for DeepSeek Harness: search sessions and message content (with message-level jumps), run commands, extend via providers.",
   "icon": "icon.svg",
@@ -48,11 +48,11 @@
   "author": "mumuhmumu",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hhse/dsh-cmdk.git"
+    "url": "git+https://github.com/hseons/dsh-cmdk.git"
   },
-  "homepage": "https://github.com/hhse/dsh-cmdk#readme",
+  "homepage": "https://github.com/hseons/dsh-cmdk#readme",
   "bugs": {
-    "url": "https://github.com/hhse/dsh-cmdk/issues"
+    "url": "https://github.com/hseons/dsh-cmdk/issues"
   },
   "publishConfig": {
     "access": "public"

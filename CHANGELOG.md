@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 — 2026-11-21
+
+### 修复
+
+- 仓库地址改到 `hseons/dsh-cmdk`（原 `hhse/dsh-cmdk` 已不存在），`repository` / `homepage` / `bugs` 三个字段同步更新。功能与 0.4.0 相同。
+
 ## 0.4.0 — 2026-11-21
 
 ### 新增
