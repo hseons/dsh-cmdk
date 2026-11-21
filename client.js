@@ -670,7 +670,11 @@ window.__ModuleLoader__.load({
         onClose: typeof spec.onClose === 'function' ? spec.onClose : null,
         dispose: typeof spec.dispose === 'function' ? spec.dispose : null,
       };
-      providers = providers.filter((row) => row.id !== entry.id);
+      // splice in place: plugins hold on to the array reference through
+      // useProviders(), so reassigning it would strand them on a stale copy
+      for (var at = providers.length - 1; at >= 0; at -= 1) {
+        if (providers[at].id === entry.id) providers.splice(at, 1);
+      }
       providers.push(entry);
       emitProviders();
       return true;
@@ -678,11 +682,12 @@ window.__ModuleLoader__.load({
 
     function unregisterProvider(id) {
       var found = null;
-      providers = providers.filter((row) => {
-        if (row.id !== id) return true;
-        found = row;
-        return false;
-      });
+      for (var at = 0; at < providers.length; at += 1) {
+        if (providers[at].id === id) {
+          found = providers.splice(at, 1)[0];
+          break;
+        }
+      }
       if (!found) return false;
       if (found.dispose) {
         try {
@@ -2241,7 +2246,7 @@ window.__ModuleLoader__.load({
         }
         providerRows.forEach((provider) => {
           if (only.provider && provider !== only.provider) return;
-          (provider.commands || []).forEach((command) => {
+          (Array.isArray(provider.commands) ? provider.commands : []).forEach((command) => {
             var normalized = normalizeProviderRow(command, provider);
             if (normalized) items.push(providerItem(ctx, lang, normalized));
           });

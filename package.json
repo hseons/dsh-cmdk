@@ -1,7 +1,16 @@
 {
   "name": "dsh-cmdk",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
+  "scripts": {
+    "test": "node tests/run.cjs",
+    "check": "node --check index.js && node --check client.js",
+    "pack:check": "npm pack --dry-run",
+    "verify": "npm run check && npm test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "description": "⌘K command palette for DeepSeek Harness: search sessions and message content (with message-level jumps), run commands, extend via providers.",
   "icon": "icon.svg",
   "keywords": [

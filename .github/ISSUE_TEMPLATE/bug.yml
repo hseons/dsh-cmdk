@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in the palette behaves wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check that the same behaviour is not already documented in the README's keyboard table.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: Shown at the bottom of the `?` panel, or `npm ls dsh-cmdk`
+      placeholder: 0.9.0
+    validations:
+      required: true
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH version
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Query mode
+      options:
+        - No prefix (all)
+        - '> commands'
+        - '@ sessions'
+        - '# workspaces'
+        - '/ files'
+        - '= calculator'
+        - '? help'
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: The exact keystrokes or the text you typed
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: Console output
+      description: Any error from `client.js` or a `/cmdk/*` route
+      render: shell
