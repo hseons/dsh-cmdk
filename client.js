@@ -25,7 +25,7 @@ window.__ModuleLoader__.load({
     var IS_MAC = /Mac|iPhone|iPad|iPod/.test(String(navigator.platform || navigator.userAgent || ''));
     var MOD_KEY = IS_MAC ? '⌘' : 'Ctrl';
     var HOTKEY = MOD_KEY + 'K';
-    var VERSION = '0.4.0';
+    var VERSION = '0.4.2';
 
     var C = {
       text: 'var(--dsw-alias-label-primary)',
@@ -1827,9 +1827,26 @@ window.__ModuleLoader__.load({
       var [plugins, setPlugins] = useState([]);
       var [configState, setConfigState] = useState(() => readConfig());
       var [extHits, setExtHits] = useState([]);
+      var [version, setVersion] = useState(VERSION);
       var ext = useExtCommands();
       var providerList = useProviders();
       var parsed = parseQuery(query);
+
+      // The host owns the real version; the constant is only a fallback for
+      // the frame before /info answers (or when the route is unreachable).
+      useEffect(() => {
+        if (!open) return undefined;
+        var alive = true;
+        getJson(API + '/info')
+          .then((payload) => {
+            if (!alive || !payload || typeof payload.version !== 'string' || !payload.version) return;
+            setVersion(payload.version);
+          })
+          .catch(() => undefined);
+        return () => {
+          alive = false;
+        };
+      }, [open]);
 
       function reloadPlugins() {
         getJson(API + '/plugins')
@@ -2021,7 +2038,7 @@ window.__ModuleLoader__.load({
           providers: providerList,
           extHits: extHits,
           config: configState,
-          version: VERSION,
+          version: version,
         });
       } catch (error) {
         // Rendering this palette must never take the shell down: an unexpected

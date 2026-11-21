@@ -32,6 +32,17 @@ const CATALOG_SIZE = 120;
 const DEFAULT_DEPTH = 40;
 const MAX_DEPTH = 200;
 
+/** The version this file ships with, read once from the package manifest. */
+const PACKAGE_VERSION = (() => {
+  try {
+    const raw = fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8');
+    const parsed = JSON.parse(raw);
+    return typeof parsed.version === 'string' ? parsed.version : '';
+  } catch {
+    return '';
+  }
+})();
+
 let catalogCache = { at: 0, items: [] };
 /** Query → content hits, so held-down keys do not rescan the logs every 180 ms. */
 const contentCache = new Map();
@@ -322,6 +333,7 @@ export function apply(ctx, config) {
         if (refused(ctx, req, res)) return;
         sendJson(res, 200, {
           ok: true,
+          version: PACKAGE_VERSION,
           home: dshHome(),
           profile: profileDir(),
           platform: process.platform,
