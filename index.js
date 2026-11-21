@@ -31,6 +31,8 @@ const CATALOG_SIZE = 120;
 /** How many of the newest sessions the content scan looks at per query. */
 const DEFAULT_DEPTH = 40;
 const MAX_DEPTH = 200;
+/** Context rows are truncated at this many characters. */
+const MAX_CONTEXT_CHARS = 4000;
 
 /** The version this file ships with, read once from the package manifest. */
 const PACKAGE_VERSION = (() => {
@@ -189,23 +191,29 @@ async function sessionCatalog(ctx) {
  * the newest sessions and uses the backend-independent `filterEvents` text
  * predicate instead: no index required, just the session logs.
  */
-async function matchContent(ctx, text, limit, depth) {
+async function matchContent(ctx, text, limit, depth, cursor) {
   const query = ctx.get('sessionQuery');
-  if (!query || text.length < 2) return [];
+  if (!query || text.length < 2) return { hits: [], next: null };
 
   const scanSize = Math.max(4, Math.min(MAX_DEPTH, Number(depth) || DEFAULT_DEPTH));
-  const key = text + '\u0000' + String(scanSize);
+  const cursorParam = typeof cursor === 'string' ? cursor : '';
+  const key = text + '\u0000' + String(scanSize) + '\u0000' + cursorParam;
   const cached = contentCache.get(key);
-  if (cached && Date.now() - cached.at < CONTENT_TTL) return cached.items.slice(0, limit);
+  if (cached && Date.now() - cached.at < CONTENT_TTL) {
+    return { hits: cached.items.slice(0, limit), next: cached.next || null };
+  }
 
   let hits = [];
+  let next = null;
 
   // Indexed search first: it reports the seq of the matching message, so the
   // palette can jump to that turn instead of dumping you at the session top.
   if (typeof query.searchSessions === 'function') {
     try {
-      const page = await query.searchSessions({ query: text, limit });
-      const rows = Array.isArray(page && page.items) ? page.items : [];
+      const request = cursorParam ? { query: text, limit, cursor: cursorParam } : { query: text, limit };
+      const found = await query.searchSessions(request);
+      next = found && found.nextCursor ? String(found.nextCursor) : null;
+      const rows = Array.isArray(found && found.items) ? found.items : [];
       const catalog = await sessionCatalog(ctx);
       const titles = new Map(catalog.map((item) => [item.sessionId, item.title]));
       hits = rows
@@ -232,7 +240,7 @@ async function matchContent(ctx, text, limit, depth) {
   // Fallback: the full-text index can be empty in the wild, so walk the newest
   // sessions with the backend-independent text predicate. `depth` decides how
   // far back this goes; it is the one knob behind the "search depth" setting.
-  if (!hits.length && typeof query.filterEvents === 'function') {
+  if (!hits.length && !cursorParam && typeof query.filterEvents === 'function') {
     const catalog = await sessionCatalog(ctx);
     const scan = catalog.slice(0, scanSize);
     for (const item of scan) {
@@ -259,16 +267,43 @@ async function matchContent(ctx, text, limit, depth) {
   }
 
   if (contentCache.size > 40) contentCache.clear();
-  contentCache.set(key, { at: Date.now(), items: hits });
-  return hits;
+  contentCache.set(key, { at: Date.now(), items: hits, next });
+  return { hits, next };
 }
 
-/** Best-effort text of one session event: the payload may nest it. */
+/** Concatenated text blocks of one message-ish object. */
+function blocksText(container) {
+  if (!container || typeof container !== 'object') return '';
+  const blocks = Array.isArray(container.content) ? container.content : null;
+  if (!blocks) return '';
+  const parts = [];
+  for (const block of blocks) {
+    if (block && block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+      parts.push(block.text);
+    }
+  }
+  return parts.join('\n');
+}
+
+/**
+ * Best-effort text of one session event.
+ *
+ * Session logs store messages as `{ type, seq, time, data }`, and the text sits
+ * in `data.content[]` (user/developer) or `data.message.content[]`
+ * (assistant/tool). Older call sites used `payload.text`, which never matches a
+ * real log — the context panel silently rendered empty rows because of it.
+ */
 function eventText(event) {
   if (!event || typeof event !== 'object') return '';
-  const payload = event.payload && typeof event.payload === 'object' ? event.payload : event;
-  for (const value of [payload.text, event.text]) {
-    if (typeof value === 'string' && value.trim()) return value;
+  const data = event.data && typeof event.data === 'object' ? event.data : null;
+  const candidates = [data, data && data.message, event.payload, event.message, event];
+  for (const container of candidates) {
+    const text = blocksText(container);
+    if (text) return text;
+  }
+  for (const container of candidates) {
+    if (!container || typeof container !== 'object') continue;
+    if (typeof container.text === 'string' && container.text.trim()) return container.text;
   }
   return '';
 }
@@ -369,8 +404,14 @@ export function apply(ctx, config) {
           }
           // The client filters titles locally (fuzzy + pinyin); the Host only
           // contributes the expensive part: message-content hits.
-          const hits = await matchContent(ctx, text, limit, depth);
-          sendJson(res, 200, { ok: true, items: catalog, hits, total: catalog.length });
+          const found = await matchContent(ctx, text, limit, depth, url.searchParams.get('cursor') || '');
+          sendJson(res, 200, {
+            ok: true,
+            items: catalog,
+            hits: found.hits,
+            next: found.next,
+            total: catalog.length,
+          });
         } catch (error) {
           sendJson(res, 500, { ok: false, error: String((error && error.message) || error) });
         }
@@ -409,7 +450,7 @@ export function apply(ctx, config) {
           const raw = url.searchParams.get(name);
           if (raw === null || raw === '') return 2;
           const value = Number(raw);
-          return Number.isFinite(value) ? Math.min(Math.max(Math.trunc(value), 0), 10) : 2;
+          return Number.isFinite(value) ? Math.min(Math.max(Math.trunc(value), 0), 20) : 2;
         };
         try {
           const frame = await query.readEvent({
@@ -421,14 +462,20 @@ export function apply(ctx, config) {
           const events = Array.isArray(frame && frame.events) ? frame.events : [];
           sendJson(res, 200, {
             ok: true,
+            targetSeq: seq,
             startSeq: frame && frame.startSeq,
             endSeq: frame && frame.endSeq,
             around: events
-              .map((event) => ({
-                seq: Number.isFinite(event && event.seq) ? event.seq : null,
-                kind: event && event.kind ? String(event.kind) : '',
-                text: eventText(event).slice(0, 1200),
-              }))
+              .map((event) => {
+                const full = eventText(event);
+                return {
+                  seq: Number.isFinite(event && event.seq) ? event.seq : null,
+                  type: event && event.type ? String(event.type) : '',
+                  time: Number.isFinite(event && event.time) ? event.time : 0,
+                  text: full.slice(0, MAX_CONTEXT_CHARS),
+                  clipped: full.length > MAX_CONTEXT_CHARS,
+                };
+              })
               .filter((row) => row.text),
           });
         } catch (error) {

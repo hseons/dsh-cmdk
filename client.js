@@ -194,6 +194,18 @@ window.__ModuleLoader__.load({
         setResetDone: '已恢复默认设置',
         adjustHint: '←/→ 调整',
         toggleHint: '回车切换',
+        ctxWindow: '上下文范围',
+        ctxWindowSub: '前后各 {n} 条',
+        ctxClipped: '已截断，打开会话看全文',
+        ctxJump: '从这条打开会话',
+        ctxEmpty: '这一条没有可显示的文本',
+        roleUser: '你',
+        roleAssistant: '助手',
+        roleTool: '工具',
+        roleSystem: '系统',
+        moreHits: '加载更多结果',
+        moreHitsSub: '接着取下一页命中',
+        moreEnd: '没有更多了',
         extTitle: '扩展',
         extSub: '管理已注册的 provider',
         extEmpty: '还没有第三方 provider',
@@ -363,6 +375,18 @@ window.__ModuleLoader__.load({
         setResetDone: 'Defaults restored',
         adjustHint: '←/→ adjust',
         toggleHint: 'Enter toggles',
+        ctxWindow: 'Context window',
+        ctxWindowSub: '{n} message(s) either side',
+        ctxClipped: 'Clipped — open the session for the full text',
+        ctxJump: 'Open the session at this message',
+        ctxEmpty: 'No displayable text in this message',
+        roleUser: 'You',
+        roleAssistant: 'Assistant',
+        roleTool: 'Tool',
+        roleSystem: 'System',
+        moreHits: 'Load more hits',
+        moreHitsSub: 'Fetch the next page of matches',
+        moreEnd: 'No more hits',
         extTitle: 'Extensions',
         extSub: 'Manage registered providers',
         extEmpty: 'No third-party providers yet',
@@ -1059,6 +1083,224 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** Query text of the current search, kept for in-panel highlighting. */
+    var lastNeedle = '';
+
+    /** Context window sizes the panel cycles through with `←` / `→`. */
+    var CTX_SIZES = [2, 5, 10];
+
+    function roleLabel(lang, type) {
+      var t = copy(lang);
+      if (type === 'user/message') return t.roleUser;
+      if (type === 'assistant/message') return t.roleAssistant;
+      if (type === 'tool/result') return t.roleTool;
+      return t.roleSystem;
+    }
+
+    function stepSize(size, delta) {
+      var at = CTX_SIZES.indexOf(size);
+      if (at < 0) at = CTX_SIZES.reduce((best, value, index) => (Math.abs(value - size) < Math.abs(CTX_SIZES[best] - size) ? index : best), 0);
+      var next = at + (delta > 0 ? 1 : -1);
+      return CTX_SIZES[Math.min(Math.max(next, 0), CTX_SIZES.length - 1)];
+    }
+
+    function clockOf(time) {
+      if (!Number.isFinite(time) || !time) return '';
+      try {
+        return new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } catch {
+        return '';
+      }
+    }
+
+    /**
+     * The message around one hit, rendered as a panel of its own.
+     *
+     * The Host sends the target message plus neighbours; each row keeps its
+     * original line breaks (code and stack traces stay readable) and can fork,
+     * re-ask, copy, or open the session right at that seq.
+     */
+    function openContext(ctx, lang, id, seq, size, needle) {
+      var t = copy(lang);
+      var span = CTX_SIZES.indexOf(size) >= 0 ? size : CTX_SIZES[0];
+      var params =
+        '?sessionId=' + encodeURIComponent(id) +
+        '&seq=' + String(seq) +
+        '&before=' + String(span) +
+        '&after=' + String(span);
+      return getJson(API + '/message' + params).then(
+        (payload) => {
+          var around = Array.isArray(payload.around) ? payload.around : [];
+          var rows = [];
+          rows.push(
+            item('ctx:window', 'action', t.ctxWindow, t.ctxWindowSub.replace('{n}', String(span)), null, null, {
+              badge: String(span),
+              adjust: (delta) =>
+                openContext(ctx, lang, id, seq, stepSize(span, delta), needle).then((panel) => ({ replace: panel.push })),
+            }),
+          );
+          if (!around.length) {
+            rows.push(item('ctx:empty', 'action', t.ctxEmpty, t.previewHint, () => undefined));
+          }
+          around.forEach((line) => {
+            var at = typeof line.seq === 'number' ? line.seq : 0;
+            var text = String(line.text || '');
+            var hit = at === seq;
+            var sub = '#' + at;
+            if (line.clipped) sub += ' · ' + t.ctxClipped;
+            rows.push(
+              item(
+                'ctx:' + at,
+                'action',
+                roleLabel(lang, line.type) + (clockOf(line.time) ? ' · ' + clockOf(line.time) : ''),
+                sub,
+                () => copyText(text).then(() => ({ status: t.copied })),
+                () => {
+                  var actions = [
+                    item('ctx:copy:' + at, 'action', t.copySnippet, '', () =>
+                      copyText(text).then(() => ({ status: t.copied })),
+                    ),
+                    item('ctx:ask:' + at, 'action', t.askAbout, t.askAboutHint, () => {
+                      ctx.uiWorkspace.startSession(undefined, {
+                        prompt: '关于这段内容：\n\n> ' + text.replace(/\n/g, '\n> ') + '\n\n',
+                        whenDraftExists: 'append',
+                      });
+                      return undefined;
+                    }),
+                  ];
+                  if (Number.isFinite(at)) {
+                    actions.push(
+                      item('ctx:fork:' + at, 'action', t.forkHere, t.forkHereHint, () =>
+                        Promise.resolve(ctx.sessions.fork({ sessionId: id, atSeq: at })).then((childId) => {
+                          if (childId) ctx.uiWorkspace.openSession(childId);
+                          return { status: t.done };
+                        }),
+                      ),
+                      item('ctx:open:' + at, 'action', t.ctxJump, '', () => {
+                        ctx.uiWorkspace.openSession(id);
+                        return undefined;
+                      }),
+                    );
+                  }
+                  return actions;
+                },
+                { body: text, dot: hit, force: true },
+              ),
+            );
+          });
+          return { push: { title: t.ctxTitle + ' · #' + seq, items: rows } };
+        },
+      );
+    }
+
+    // Lifetime of the context panel: how many messages sit on each side.
+    var CTX_SIZES = [2, 5, 10];
+
+    // Last plain query text, kept module-level so panels (which never see the
+    // input field) can still highlight what the user typed.
+    var lastNeedle = '';
+
+    function roleLabel(lang, type) {
+      var t = copy(lang);
+      if (type === 'user/message') return t.roleUser;
+      if (type === 'assistant/message') return t.roleAssistant;
+      if (type === 'tool/result') return t.roleTool;
+      return t.roleSystem;
+    }
+
+    function nextCtxSize(size, delta) {
+      var at = CTX_SIZES.indexOf(size);
+      if (at < 0) at = 0;
+      var to = Math.min(CTX_SIZES.length - 1, Math.max(0, at + (delta > 0 ? 1 : -1)));
+      return CTX_SIZES[to];
+    }
+
+    function clockOf(ms) {
+      if (!ms) return '';
+      try {
+        return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } catch (error) {
+        return '';
+      }
+    }
+
+    /**
+     * The turns around one message hit.
+     *
+     * Unlike the old one-line preview this keeps the original line breaks, marks
+     * the matched turn, lets the window grow, and exposes the same actions the
+     * hit row has — so a match can be used without opening the session first.
+     */
+    function openContext(ctx, lang, id, seq, size, needle) {
+      var t = copy(lang);
+      var span = CTX_SIZES.indexOf(size) >= 0 ? size : CTX_SIZES[0];
+      var params =
+        '?sessionId=' +
+        encodeURIComponent(id) +
+        '&seq=' +
+        String(seq) +
+        '&before=' +
+        String(span) +
+        '&after=' +
+        String(span);
+      return getJson(API + '/message' + params).then((payload) => {
+        var rows = [
+          item('ctx:window', 'action', t.ctxWindow, t.ctxWindowSub.replace('{n}', String(span)), null, null, {
+            badge: String(span),
+            adjust: function (delta) {
+              return openContext(ctx, lang, id, seq, nextCtxSize(span, delta), needle).then((panel) => ({
+                replace: panel.push,
+              }));
+            },
+          }),
+        ];
+        var around = Array.isArray(payload.around) ? payload.around : [];
+        if (!around.length) rows.push(item('ctx:empty', 'action', t.ctxEmpty, '', () => undefined));
+        around.forEach((line) => {
+          var at = typeof line.seq === 'number' ? line.seq : 0;
+          var text = String(line.text || '');
+          var when = clockOf(line.time);
+          rows.push(
+            item(
+              'ctx:' + at,
+              'action',
+              roleLabel(lang, line.type) + (when ? ' · ' + when : ''),
+              '#' + at + (line.clipped ? ' · ' + t.ctxClipped : ''),
+              function () {
+                return copyText(text).then(() => ({ status: t.copied }));
+              },
+              function () {
+                return [
+                  item('ctx:fork:' + at, 'action', t.forkHere, t.forkHereHint, () =>
+                    Promise.resolve(ctx.sessions.fork({ sessionId: id, atSeq: at })).then((childId) => {
+                      if (childId) ctx.uiWorkspace.openSession(childId);
+                      return { status: t.done };
+                    }),
+                  ),
+                  item('ctx:ask:' + at, 'action', t.askAbout, t.askAboutHint, () => {
+                    ctx.uiWorkspace.startSession(undefined, {
+                      prompt: '关于这段内容：\n\n> ' + text + '\n\n',
+                      whenDraftExists: 'append',
+                    });
+                    return undefined;
+                  }),
+                  item('ctx:copy:' + at, 'action', t.copySnippet, '', () =>
+                    copyText(text).then(() => ({ status: t.copied })),
+                  ),
+                  item('ctx:open:' + at, 'action', t.ctxJump, '', () => {
+                    ctx.uiWorkspace.openSession(id);
+                    return undefined;
+                  }),
+                ];
+              },
+              { body: text, dot: at === seq },
+            ),
+          );
+        });
+        return { push: { title: t.ctxTitle + ' · #' + seq, items: rows } };
+      });
+    }
+
     function sessionActions(ctx, lang, entry) {
       var t = copy(lang);
       var id = entry.sessionId;
@@ -1094,25 +1336,9 @@ window.__ModuleLoader__.load({
       }
       if (seq !== null) {
         head.push(
-          item('action:preview', 'action', t.preview, t.previewHint, () =>
-            getJson(API + '/message?sessionId=' + encodeURIComponent(id) + '&seq=' + String(seq)).then(
-              (payload) => {
-                var around = Array.isArray(payload.around) ? payload.around : [];
-                var rows = around.map((line) => {
-                  var at = typeof line.seq === 'number' ? line.seq : 0;
-                  var body = String(line.text || '').replace(/\s+/g, ' ').trim().slice(0, 140);
-                  return item(
-                    'ctx:' + at,
-                    'action',
-                    body || '—',
-                    at === seq ? t.hitFor : '#' + at,
-                    () => copyText(String(line.text || '')).then(() => ({ status: t.copied })),
-                  );
-                });
-                return { push: { title: t.ctxTitle, items: rows } };
-              },
-            ),
-          ),
+          item('action:preview', 'action', t.preview, t.previewHint, function () {
+            return openContext(ctx, lang, id, seq, 2, lastNeedle);
+          }),
         );
       }
       return head.concat([
@@ -1910,6 +2136,16 @@ window.__ModuleLoader__.load({
         items.push(row);
       });
 
+      // The Host hands back a cursor when the index has more matches than one
+      // page holds; without this row the tail of a broad search stays invisible.
+      if (needle && options.next) {
+        items.push(
+          item('session:more', 'session', t.moreHits, t.moreHitsSub, function () {
+            return typeof options.more === 'function' ? options.more(needle) : undefined;
+          }),
+        );
+      }
+
       if (wantCommand) {
         if (!only.provider) {
           if (config.pluginCommands !== false) {
@@ -2102,6 +2338,8 @@ window.__ModuleLoader__.load({
     function iconForEntry(entry) {
       if (!entry) return 'action';
       var key = String(entry.key || '');
+      if (key.indexOf('ctx:') === 0) return 'session';
+      if (key === 'session:more') return 'search';
       if (/:toggle$/.test(key)) return 'power';
       if (/:dir$/.test(key)) return 'folder';
       if (key.indexOf('set:theme') === 0) return 'theme';
@@ -2386,7 +2624,7 @@ window.__ModuleLoader__.load({
       var t = copy(lang);
       var open = useOpen();
       var [query, setQuery] = useState('');
-      var [catalog, setCatalog] = useState({ items: [], hits: [], hitsFor: '', loading: true });
+      var [catalog, setCatalog] = useState({ items: [], hits: [], hitsFor: '', next: null, loading: true });
       var [index, setIndex] = useState(0);
       var [stack, setStack] = useState([]);
       var [input, setInput] = useState(null);
@@ -2414,6 +2652,7 @@ window.__ModuleLoader__.load({
       var ext = useExtCommands();
       var providerList = useProviders();
       var parsed = parseQuery(query);
+      lastNeedle = parsed.text;
 
       // The host owns the real version; the constant is only a fallback for
       // the frame before /info answers (or when the route is unreachable).
@@ -2502,7 +2741,7 @@ window.__ModuleLoader__.load({
         if (!open) return undefined;
         var spec = parseQuery(query);
         if (spec.mode === 'help' || spec.mode === 'calc') {
-          setCatalog({ items: [], hits: [], hitsFor: query.trim(), loading: false });
+          setCatalog({ items: [], hits: [], hitsFor: query.trim(), next: null, loading: false });
           return undefined;
         }
         var alive = true;
@@ -2511,7 +2750,9 @@ window.__ModuleLoader__.load({
         setStatus(null);
         var timer = setTimeout(
           () => {
-            setCatalog((prev) => (prev.items.length ? prev : { items: [], hits: [], hitsFor: '', loading: true }));
+            setCatalog((prev) =>
+              prev.items.length ? prev : { items: [], hits: [], hitsFor: '', next: null, loading: true },
+            );
             var needleForHost = configState.fullText === false ? '' : needle;
             var params =
               '?limit=' + String(configState.resultLimit) + '&depth=' + String(configState.contentDepth);
@@ -2520,11 +2761,11 @@ window.__ModuleLoader__.load({
                 if (!alive) return;
                 var live = (payload.items || []).filter((entry) => !archived[entry.sessionId]);
                 var liveHits = (payload.hits || []).filter((entry) => !archived[entry.sessionId]);
-                setCatalog({ items: live, hits: liveHits, hitsFor: text, loading: false });
+                setCatalog({ items: live, hits: liveHits, hitsFor: text, next: payload.next || null, loading: false });
               })
               .catch(() => {
                 if (!alive) return;
-                setCatalog({ items: [], hits: [], hitsFor: text, loading: false });
+                setCatalog({ items: [], hits: [], hitsFor: text, next: null, loading: false });
               });
           },
           needle ? 180 : 0,
@@ -2628,6 +2869,8 @@ window.__ModuleLoader__.load({
           config: configState,
           version: version,
           apply: applyConfig,
+          next: catalogState.hitsFor === query.trim() ? catalogState.next : null,
+          more: loadMore,
         });
       } catch (error) {
         // Rendering this palette must never take the shell down: an unexpected
@@ -2692,6 +2935,32 @@ window.__ModuleLoader__.load({
         return next;
       }
 
+      // Appends the next page of content hits to the current catalogue. The
+      // cursor is opaque, so it is only ever echoed back to the Host.
+      function loadMore(needle) {
+        var cursor = catalogState.next;
+        if (!cursor) return undefined;
+        var params =
+          '?limit=' +
+          String(configState.resultLimit) +
+          '&depth=' +
+          String(configState.contentDepth) +
+          '&q=' +
+          encodeURIComponent(needle) +
+          '&cursor=' +
+          encodeURIComponent(cursor);
+        setStatus(t.searching);
+        return getJson(API + '/sessions' + params).then((payload) => {
+          setCatalog((prev) =>
+            Object.assign({}, prev, {
+              hits: (prev.hits || []).concat(payload.hits || []),
+              next: payload.next || null,
+            }),
+          );
+          return { keep: true };
+        });
+      }
+
       function settle(result) {
         setConfigState(readConfig());
         if (!result) {
@@ -2715,8 +2984,16 @@ window.__ModuleLoader__.load({
           setStatus(result.status || null);
           return;
         }
+        if (result.replace && result.replace.items) {
+          setStack(stack.slice(0, -1).concat([{ title: result.replace.title || '', items: result.replace.items }]));
+          setIndex(0);
+          setStatus(null);
+          return;
+        }
         if (result.push && result.push.items) {
-          setStack(stack.concat([{ title: result.push.title || '', items: result.push.items }]));
+          setStack(
+            stack.concat([{ title: result.push.title || '', items: result.push.items, searchable: result.push.searchable === true }]),
+          );
           setIndex(0);
           setStatus(null);
           return;
@@ -2859,7 +3136,8 @@ window.__ModuleLoader__.load({
           && typeof items[active].adjust === 'function') {
           event.preventDefault();
           var direction = event.key === 'ArrowRight' ? 1 : -1;
-          items[active].adjust(event.shiftKey ? direction * 10 : direction);
+          var adjusted = items[active].adjust(event.shiftKey ? direction * 10 : direction);
+          if (adjusted && typeof adjusted.then === 'function') adjusted.then(settle);
           return;
         }
         if (event.key === 'ArrowRight' || event.key === 'Tab') {
@@ -2914,7 +3192,7 @@ window.__ModuleLoader__.load({
             () => setIndex(position),
             position,
             t.hintActions,
-            stack.length ? '' : query,
+            query || lastNeedle,
           ),
         );
       });
@@ -3452,7 +3730,7 @@ window.__ModuleLoader__.load({
           onDoubleClick: onActions,
           style: {
             display: 'flex',
-            alignItems: 'center',
+            alignItems: entry.body ? 'flex-start' : 'center',
             gap: 11,
             margin: '1px 0',
             padding: '7px 10px',
@@ -3498,6 +3776,25 @@ window.__ModuleLoader__.load({
                   },
                 },
                 h(Highlight, { text: entry.sub, query: query }),
+              )
+            : null,
+          entry.body
+            ? h(
+                'div',
+                {
+                  style: {
+                    marginTop: 3,
+                    fontSize: 12.5,
+                    lineHeight: 1.55,
+                    color: C.text,
+                    opacity: 0.92,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    maxHeight: 148,
+                    overflow: 'hidden',
+                  },
+                },
+                h(Highlight, { text: entry.body, query: query }),
               )
             : null,
         ),
