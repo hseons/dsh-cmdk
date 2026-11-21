@@ -386,6 +386,11 @@ window.__ModuleLoader__.load({
       hotkey: 'mod+k',
     };
     var CONFIG_FLAGS = ['fullText', 'snippets', 'calc', 'frecency', 'pluginCommands'];
+    // True while the palette is listening for a new hotkey. The global listener
+    // must stand down, otherwise pressing (say) the current binding would close
+    // the panel instead of being recorded.
+    var hotkeyCapture = false;
+
     var HOTKEY_PATTERN = /^(?:(?:mod|alt|shift)\+)+(?:[a-z0-9]|f\d{1,2})$/i;
 
     function clampInt(value, fallback, min, max) {
@@ -2147,6 +2152,13 @@ window.__ModuleLoader__.load({
       var [extHits, setExtHits] = useState([]);
       var [version, setVersion] = useState(VERSION);
       var [capturing, setCapturing] = useState(false);
+      // Closing the panel mid-capture must not leave the global listener muted.
+      useEffect(() => {
+        if (!open) {
+          hotkeyCapture = false;
+          setCapturing(false);
+        }
+      }, [open]);
       var ext = useExtCommands();
       var providerList = useProviders();
       var parsed = parseQuery(query);
@@ -2439,6 +2451,7 @@ window.__ModuleLoader__.load({
           return;
         }
         if (typeof result.capture === 'string') {
+          hotkeyCapture = true;
           setCapturing(true);
           setStatus(t.setHotkeyWait);
           return;
@@ -2539,6 +2552,7 @@ window.__ModuleLoader__.load({
           event.preventDefault();
           event.stopPropagation();
           if (event.key === 'Escape') {
+            hotkeyCapture = false;
             setCapturing(false);
             setStatus(null);
             return;
@@ -2549,6 +2563,7 @@ window.__ModuleLoader__.load({
             return;
           }
           applyConfig({ hotkey: combo });
+          hotkeyCapture = false;
           setCapturing(false);
           setStatus(t.setHotkeyDone + ' · ' + hotkeyLabel(combo));
           return;
@@ -3337,6 +3352,7 @@ window.__ModuleLoader__.load({
     var hotkey = false;
 
     function onKey(event) {
+      if (hotkeyCapture) return;
       if (event.defaultPrevented) return;
       var binding = readConfig().hotkey;
       if (hotkeyFromEvent(event) !== binding) return;
