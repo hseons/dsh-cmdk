@@ -193,7 +193,27 @@ window.__ModuleLoader__.load({
         setResetSub: '搜索、行为、外观全部回到默认',
         setResetDone: '已恢复默认设置',
         adjustHint: '←/→ 调整',
-        toggleHint: '回车切换',      },
+        toggleHint: '回车切换',
+        extTitle: '扩展',
+        extSub: '管理已注册的 provider',
+        extEmpty: '还没有第三方 provider',
+        extEmptySub: '任何插件都能用几行代码接入，见下方「接入指南」',
+        extCommands: '命令',
+        extNoCommands: '这个 provider 没有静态命令',
+        extDisable: '停用',
+        extEnable: '启用',
+        extDisabled: '已停用',
+        extEnabled: '已启用',
+        extCopySnippet: '复制接入示例',
+        extCopied: '已复制',
+        extDocs: '接入指南',
+        extDocsSub: '复制一段可以直接粘进插件 client 的示例',
+        extPrefix: '前缀',
+        extSearchable: '支持动态搜索',
+        extCommandsOnly: '仅静态命令',
+        extCount: '{n} 个命令',
+        extDocTitle: 'provider 接入示例',
+      },
       en: {
         footer: 'Search',
         placeholder: 'Search sessions and workspaces, or run a command…',
@@ -342,7 +362,27 @@ window.__ModuleLoader__.load({
         setResetSub: 'search, behaviour and appearance',
         setResetDone: 'Defaults restored',
         adjustHint: '←/→ adjust',
-        toggleHint: 'Enter toggles',      },
+        toggleHint: 'Enter toggles',
+        extTitle: 'Extensions',
+        extSub: 'Manage registered providers',
+        extEmpty: 'No third-party providers yet',
+        extEmptySub: 'Any plugin can join with a few lines — see the integration guide below',
+        extCommands: 'Commands',
+        extNoCommands: 'This provider has no static commands',
+        extDisable: 'Disable',
+        extEnable: 'Enable',
+        extDisabled: 'disabled',
+        extEnabled: 'active',
+        extCopySnippet: 'Copy the integration snippet',
+        extCopied: 'Copied',
+        extDocs: 'Integration guide',
+        extDocsSub: 'Copy code you can paste straight into a plugin client',
+        extPrefix: 'prefix',
+        extSearchable: 'live search',
+        extCommandsOnly: 'static commands only',
+        extCount: '{n} commands',
+        extDocTitle: 'provider integration snippet',
+      },
     };
 
     // ---------------------------------------------------------------------
@@ -385,6 +425,7 @@ window.__ModuleLoader__.load({
       frecency: true,
       pluginCommands: true,
       hotkey: 'mod+k',
+      disabledProviders: [],
     };
     var CONFIG_FLAGS = ['fullText', 'snippets', 'calc', 'frecency', 'pluginCommands'];
     // True while the palette is listening for a new hotkey. The global listener
@@ -398,6 +439,16 @@ window.__ModuleLoader__.load({
       var number = Number(value);
       if (!Number.isFinite(number)) return fallback;
       return Math.max(min, Math.min(max, Math.round(number)));
+    }
+
+    /** Provider ids are strings; anything else in the stored array is dropped. */
+    function cleanIds(value) {
+      if (!Array.isArray(value)) return [];
+      var out = [];
+      value.forEach((id) => {
+        if (typeof id === 'string' && id && out.indexOf(id) < 0) out.push(id);
+      });
+      return out;
     }
 
     function readConfig() {
@@ -416,6 +467,7 @@ window.__ModuleLoader__.load({
           if (typeof parsed.hotkey === 'string' && HOTKEY_PATTERN.test(parsed.hotkey)) {
             out.hotkey = parsed.hotkey;
           }
+          out.disabledProviders = cleanIds(parsed.disabledProviders);
         }
       } catch {
         /* a broken or absent record keeps the defaults */
@@ -433,6 +485,7 @@ window.__ModuleLoader__.load({
           if (typeof patch[key] === 'boolean') next[key] = patch[key];
         }
         if (typeof patch.hotkey === 'string' && HOTKEY_PATTERN.test(patch.hotkey)) next.hotkey = patch.hotkey;
+        if (Array.isArray(patch.disabledProviders)) next.disabledProviders = cleanIds(patch.disabledProviders);
       }
       try {
         window.localStorage.setItem(CONFIG_KEY, JSON.stringify(next));
@@ -1325,8 +1378,30 @@ window.__ModuleLoader__.load({
           return {
             push: {
               title: t.settings,
+              searchable: true,
               items: function () {
                 return buildSettings(ctx, lang, apply);
+              },
+            },
+          };
+        }),
+        item('cmd:ext', 'action', t.extTitle, t.extSub, function () {
+          return {
+            push: {
+              title: t.extTitle,
+              searchable: true,
+              items: function () {
+                return buildProvidersPanel(ctx, lang, apply);
+              },
+            },
+          };
+        }),
+        item('cmd:docs', 'action', t.extDocs, t.extDocsSub, function () {
+          return {
+            push: {
+              title: t.extDocs,
+              items: function () {
+                return buildDocsPanel(lang);
               },
             },
           };
@@ -1554,6 +1629,164 @@ window.__ModuleLoader__.load({
       return rows;
     }
 
+    /**
+     * The snippet shown in the integration guide. Copied verbatim, so it has to
+     * stay valid JavaScript and stay short enough to read in one screen.
+     */
+    var PROVIDER_SNIPPET = [
+      '// in your plugin client half, after the palette is loaded',
+      'window.__DSH_CMDK__.registerProvider({',
+      "  id: 'my-plugin',",
+      "  title: '我的插件',",
+      "  prefix: 'my',                 // \"my <query>\" routes to this provider only",
+      '  commands: [',
+      "    { id: 'hello', title: '打个招呼', run: () => ({ status: 'hi' }) },",
+      '  ],',
+      '  // optional: dynamic rows for whatever the user types',
+      '  search: async (query, { signal }) => [',
+      "    { id: 'hit', title: '...', subtitle: query },",
+      '  ],',
+      '});',
+    ].join('\n');
+
+    function findProvider(id) {
+      var found = null;
+      providers.forEach((row) => {
+        if (!found && row.id === id) found = row;
+      });
+      return found;
+    }
+
+    function providerDisabled(config, id) {
+      var list = config && Array.isArray(config.disabledProviders) ? config.disabledProviders : [];
+      return list.indexOf(id) >= 0;
+    }
+
+    function setProviderDisabled(id, on, apply) {
+      var list = readConfig().disabledProviders;
+      var next = list.filter((value) => value !== id);
+      if (on) next.push(id);
+      if (typeof apply === 'function') apply({ disabledProviders: next });
+      else writeConfig({ disabledProviders: next });
+      return next;
+    }
+
+    /** Extensions panel: every provider, its prefix, its health, and a way in. */
+    function buildProvidersPanel(ctx, lang, apply) {
+      var t = copy(lang);
+      var config = readConfig();
+      var rows = [];
+      var list = providers.slice().sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      if (!list.length) {
+        rows.push(item('ext:empty', 'ext', t.extEmpty, t.extEmptySub, () => undefined));
+      }
+      list.forEach((provider) => {
+        var off = providerDisabled(config, provider.id);
+        var sub = provider.prefix
+          ? t.extPrefix + ' ' + provider.prefix
+          : provider.search
+            ? t.extSearchable
+            : t.extCommandsOnly;
+        rows.push(
+          item(
+            'ext:provider:' + provider.id,
+            'ext',
+            providerTitle(provider, lang),
+            sub,
+            function () {
+              return {
+                push: {
+                  title: providerTitle(provider, lang),
+                  searchable: true,
+                  items: function () {
+                    return buildProviderDetail(ctx, lang, provider.id, apply);
+                  },
+                },
+              };
+            },
+            null,
+            { badge: off ? t.extDisabled : t.extCount.replace('{n}', String(provider.commands.length)), dot: !off },
+          ),
+        );
+      });
+      rows.push(
+        item('ext:docs', 'system', t.extDocs, t.extDocsSub, function () {
+          return {
+            push: {
+              title: t.extDocs,
+              items: function () {
+                return buildDocsPanel(lang);
+              },
+            },
+          };
+        }),
+      );
+      return rows;
+    }
+
+    /** One provider: its commands, plus enable/disable and a copyable snippet. */
+    function buildProviderDetail(ctx, lang, id, apply) {
+      var t = copy(lang);
+      var provider = findProvider(id);
+      if (!provider) {
+        return [item('ext:gone', 'system', t.extEmpty, t.extEmptySub, () => undefined)];
+      }
+      var config = readConfig();
+      var off = providerDisabled(config, provider.id);
+      var rows = [
+        item(
+          'ext:toggle:' + id,
+          'ext',
+          off ? t.extEnable : t.extDisable,
+          off ? t.extDisabled : t.extEnabled,
+          function () {
+            var on = !off;
+            setProviderDisabled(id, on, apply);
+            return { keep: true, status: (on ? t.extDisabled : t.extEnabled) + ' · ' + providerTitle(provider, lang) };
+          },
+          null,
+          { badge: off ? t.extDisabled : t.extEnabled, dot: !off },
+        ),
+        item('ext:copy:' + id, 'ext', t.extCopySnippet, provider.id, () =>
+          copyText(PROVIDER_SNIPPET).then(() => ({ status: t.extCopied })),
+        ),
+      ];
+      if (provider.commands.length) {
+        provider.commands.forEach((command) => {
+          var title = providerTitle(command, lang) || command.id;
+          rows.push(
+            item(
+              'ext:cmd:' + id + ':' + command.id,
+              'system',
+              title,
+              typeof command.sub === 'string' ? command.sub : '',
+              () => callRun(command, ctx),
+            ),
+          );
+        });
+      } else {
+        rows.push(item('ext:nocmd:' + id, 'system', t.extNoCommands, '', () => undefined));
+      }
+      if (provider.search) {
+        rows.push(item('ext:search:' + id, 'system', t.extSearchable, t.extPrefix + ' ' + (provider.prefix || '—'), () => undefined));
+      }
+      return rows;
+    }
+
+    /** The integration guide: one snippet, one copy. */
+    function buildDocsPanel(lang) {
+      var t = copy(lang);
+      var rows = [
+        item('docs:snippet', 'system', t.extDocTitle, t.extCopySnippet, () =>
+          copyText(PROVIDER_SNIPPET).then(() => ({ status: t.extCopied })),
+        ),
+      ];
+      PROVIDER_SNIPPET.split('\n').forEach((line, index) => {
+        rows.push(item('docs:line:' + index, 'system', line, '', () => copyText(line).then(() => ({ status: t.extCopied }))));
+      });
+      return rows;
+    }
+
     // ---------------------------------------------------------------------
     // root list
     // ---------------------------------------------------------------------
@@ -1590,6 +1823,17 @@ window.__ModuleLoader__.load({
       return t.recent;
     }
 
+    /**
+     * Panels flagged `searchable` narrow their own rows instead of handing the
+     * query back to the global search. Kept out of the component so it can be
+     * tested without a DOM.
+     */
+    function filterPanelRows(rows, query) {
+      var needle = String(query == null ? '' : query).trim();
+      if (!needle) return rows;
+      return rows.filter((row) => scoreOf(needle, row) > 0);
+    }
+
     function buildRoot(ctx, lang, query, catalog, hits, workspaces, recent, plugins, ext, reloadPlugins, extra) {
       var t = copy(lang);
       var items = [];
@@ -1599,9 +1843,14 @@ window.__ModuleLoader__.load({
       var parsed = options.parsed && typeof options.parsed === 'object' ? options.parsed : parseQuery(text);
       var mode = parsed.mode || 'all';
       var needle = mode === 'all' ? text : parsed.text;
-      var providerRows = Array.isArray(options.providers) ? options.providers : [];
-      var extHits = Array.isArray(options.extHits) ? options.extHits : [];
       var config = options.config && typeof options.config === 'object' ? options.config : DEFAULT_CONFIG;
+      var parked = Array.isArray(config.disabledProviders) ? config.disabledProviders : [];
+      var providerRows = (Array.isArray(options.providers) ? options.providers : []).filter(
+        (row) => row && parked.indexOf(row.id) < 0,
+      );
+      var extHits = (Array.isArray(options.extHits) ? options.extHits : []).filter(
+        (row) => row && parked.indexOf(row.providerId) < 0,
+      );
       var version = typeof options.version === 'string' ? options.version : '';
       var only = mode === 'all' || mode === 'command'
         ? resolveProviderPrefix(needle, providerRows)
@@ -1859,6 +2108,8 @@ window.__ModuleLoader__.load({
       if (key.indexOf('set:lang') === 0) return 'globe';
       if (key.indexOf('set:reset') === 0) return 'refresh';
       if (key.indexOf('set:clear-recent') === 0) return 'archive';
+      if (key.indexOf('ext:') === 0) return 'plugin';
+      if (key.indexOf('docs:') === 0) return 'external';
       if (key.indexOf('set:') === 0) return 'system';
       if (key.indexOf('theme:') === 0) return 'theme';
       if (key.indexOf('lang:') === 0) return 'globe';
@@ -2366,7 +2617,7 @@ window.__ModuleLoader__.load({
       else if (parsed.mode === 'help') placeholder = t.modeHelp;
       var stackTop = stack.length ? stack[stack.length - 1] : null;
       // A sub-panel owns the input: show its name so the user knows where they are.
-      if (stackTop && !query) placeholder = stackTop.title;
+      if (stackTop) placeholder = stackTop.title;
 
       var root;
       try {
@@ -2386,6 +2637,9 @@ window.__ModuleLoader__.load({
       }
       var current = stack.length ? stack[stack.length - 1] : null;
       var currentItems = current ? (typeof current.items === 'function' ? current.items() : current.items) : null;
+      // Panels flagged `searchable` keep the keystrokes: typing narrows the panel
+      // instead of dropping the user back into the global search.
+      if (current && current.searchable) currentItems = filterPanelRows(currentItems, query);
       var items = input ? [] : currentItems || root;
       var active = Math.min(index, Math.max(items.length - 1, 0));
 
@@ -2886,7 +3140,8 @@ window.__ModuleLoader__.load({
                 setIndex(0);
                 // Typing means "search everything again": a sub-panel (actions,
                 // settings, help) would otherwise swallow the keystrokes.
-                if (next && stack.length) setStack([]);
+                var top = stack.length ? stack[stack.length - 1] : null;
+                if (next && top && !top.searchable) setStack([]);
               },
               onFocus: () => setFocused(true),
               onBlur: () => setFocused(false),

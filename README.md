@@ -31,6 +31,7 @@
 | `/` | 会话与工作区（路径视角） | `/ 微信插件` |
 | `=` | 计算器 | `= (128*9)/3` |
 | `?` | 帮助：键位、模式、已接入的 provider | `?` |
+| `> 设置` / `> 扩展` | 图形化配置 / provider 管理 | `> 扩展` |
 
 `=` 的结果回车即复制到剪贴板；`?` 里能看到每个 provider 贡献了多少命令。
 
@@ -143,6 +144,29 @@ window.__DSH_CMDK__?.unregister('my-plugin.open-docs');
 `window.dispatchEvent(new CustomEvent('dsh-cmdk:command', { detail: { id, title, run } }))`，
 或 `new CustomEvent('dsh-cmdk:provider', { detail: providerSpec })`。
 
+## 扩展面板（provider 市场）
+
+`> 扩展`（或在根列表里选「扩展」）打开一个管理页，列出当前所有已注册的 provider：
+
+| 看到什么 | 说明 |
+| --- | --- |
+| 名称 + 前缀 | 有 `prefix` 的 provider 可以用 `前缀 查询` 把搜索限定在它自己身上 |
+| 右侧胶囊 | 贡献的命令数；停用后显示「已停用」 |
+| 左侧圆点 | 亮着表示正在参与搜索与命令注入 |
+| 底部「接入指南」 | 一段可直接复制的 `registerProvider` 示例 |
+
+进入任一 provider 可以看到它注册的每条命令（回车直接执行）、一键**停用 / 启用**、
+以及**复制接入示例**。停用只影响本机渲染，不卸载插件，改主意再点回来即可；
+停用状态存在 `disabledProviders` 里，重启后仍然有效。
+
+![扩展面板（深色）](docs/extensions-dark.png)
+
+![扩展面板（浅色）](docs/extensions-light.png)
+
+**面板内搜索**：设置、扩展这类面板是「可搜索面板」——在里面打字只会缩小当前面板的
+行（支持拼音首字母，例如 `qwss` 命中文搜索），不会把你踢回全局搜索；想重新全局搜，
+按 `←` 或 `esc` 回到上一层就行。
+
 ## 配置与记忆
 
 全部存在 `localStorage`，不上传：
@@ -165,6 +189,7 @@ window.__DSH_CMDK__?.unregister('my-plugin.open-docs');
 | `frecency` | boolean | true | 空查询时按使用频率排序 |
 | `pluginCommands` | boolean | true | 是否把其它插件的命令注入面板 |
 | `hotkey` | `mod+k` 形式 | `mod+k` | 打开面板的组合键，支持 `mod` / `alt` / `shift` 叠加 |
+| `disabledProviders` | provider id 数组 | `[]` | 停用的 provider，停用后它的命令与搜索结果都不再出现 |
 
 搜索深度 `contentDepth` 决定正文搜索回退扫描时看多少个会话，默认 40。
 面板里的「搜索深度」命令可以直接改，不用手写 localStorage。
