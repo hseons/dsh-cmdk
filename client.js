@@ -150,7 +150,49 @@ window.__ModuleLoader__.load({
         configOff: '关',
         depthStatus: '扫描会话数',
         noDepth: '先用 > @ # / = ? 哪个模式？',
-      },
+
+        // settings panel
+        settings: '设置',
+        settingsSub: '面板的行为、外观与快捷键',
+        setSearch: '搜索',
+        setBehavior: '行为',
+        setLook: '外观',
+        setKeys: '快捷键',
+        setMaint: '维护',
+        setFullText: '全文搜索',
+        setFullTextOn: '搜标题，也搜会话正文',
+        setFullTextOff: '只搜会话标题，最快',
+        setDepth: '搜索深度',
+        setDepthSub: '覆盖多少个最近会话的正文',
+        setSnippets: '显示命中片段',
+        setSnippetsSub: '命中行里带一段上下文',
+        setLimit: '结果条数',
+        setLimitSub: '一次最多列出多少条',
+        setFrecency: '最近使用优先',
+        setFrecencySub: '按使用频率与时间排序',
+        setCalc: '计算器',
+        setCalcSub: '输入 = 2^10 直接算',
+        setPlugins: '插件命令',
+        setPluginsSub: '显示第三方插件注册的命令',
+        setFont: '字号',
+        setFontSub: '会话正文与面板文字',
+        setTheme: '主题',
+        setThemeSub: '浅色、深色或跟随系统',
+        setLang: '语言',
+        setLangSub: '面板文案语言',
+        setHotkey: '打开面板',
+        setHotkeySub: '回车后按下新组合键',
+        setHotkeyWait: '按下新的组合键…（Esc 取消）',
+        setHotkeyDone: '快捷键已更新',
+        setHotkeyBad: '需要至少一个修饰键',
+        setClearRecent: '清空最近使用',
+        setClearRecentSub: '重置使用频率记录',
+        setClearDone: '已清空',
+        setReset: '恢复默认设置',
+        setResetSub: '搜索、行为、外观全部回到默认',
+        setResetDone: '已恢复默认设置',
+        adjustHint: '←/→ 调整',
+        toggleHint: '回车切换',      },
       en: {
         footer: 'Search',
         placeholder: 'Search sessions and workspaces, or run a command…',
@@ -258,7 +300,48 @@ window.__ModuleLoader__.load({
         configOff: 'off',
         depthStatus: 'sessions scanned',
         noDepth: 'Which mode? > @ # / = ?',
-      },
+
+        settings: 'Settings',
+        settingsSub: 'Behaviour, appearance and shortcuts',
+        setSearch: 'Search',
+        setBehavior: 'Behaviour',
+        setLook: 'Appearance',
+        setKeys: 'Shortcuts',
+        setMaint: 'Maintenance',
+        setFullText: 'Full-text search',
+        setFullTextOn: 'titles and message bodies',
+        setFullTextOff: 'titles only, fastest',
+        setDepth: 'Search depth',
+        setDepthSub: 'how many recent sessions to scan',
+        setSnippets: 'Show match snippets',
+        setSnippetsSub: 'quote a little context in the row',
+        setLimit: 'Result limit',
+        setLimitSub: 'how many rows to list at once',
+        setFrecency: 'Recent first',
+        setFrecencySub: 'rank by frequency and recency',
+        setCalc: 'Calculator',
+        setCalcSub: 'type = 2^10 to evaluate',
+        setPlugins: 'Plugin commands',
+        setPluginsSub: 'show commands from third-party plugins',
+        setFont: 'Font size',
+        setFontSub: 'session text and the palette',
+        setTheme: 'Theme',
+        setThemeSub: 'light, dark or follow system',
+        setLang: 'Language',
+        setLangSub: 'palette wording',
+        setHotkey: 'Open palette',
+        setHotkeySub: 'press a new combination after Enter',
+        setHotkeyWait: 'Press a new combination… (Esc to cancel)',
+        setHotkeyDone: 'Shortcut updated',
+        setHotkeyBad: 'needs at least one modifier',
+        setClearRecent: 'Clear recent usage',
+        setClearRecentSub: 'reset the frequency record',
+        setClearDone: 'Cleared',
+        setReset: 'Restore defaults',
+        setResetSub: 'search, behaviour and appearance',
+        setResetDone: 'Defaults restored',
+        adjustHint: '←/→ adjust',
+        toggleHint: 'Enter toggles',      },
     };
 
     // ---------------------------------------------------------------------
@@ -292,23 +375,41 @@ window.__ModuleLoader__.load({
     // config: one small localStorage record, defaults survive private mode
     // ---------------------------------------------------------------------
     var CONFIG_KEY = 'dsh-cmdk/config';
-    var DEFAULT_CONFIG = { contentDepth: 40, calc: true, frecency: true };
+    var DEFAULT_CONFIG = {
+      contentDepth: 40,
+      fullText: true,
+      snippets: true,
+      resultLimit: 24,
+      calc: true,
+      frecency: true,
+      pluginCommands: true,
+      hotkey: 'mod+k',
+    };
+    var CONFIG_FLAGS = ['fullText', 'snippets', 'calc', 'frecency', 'pluginCommands'];
+    var HOTKEY_PATTERN = /^(?:(?:mod|alt|shift)\+)+(?:[a-z0-9]|f\d{1,2})$/i;
+
+    function clampInt(value, fallback, min, max) {
+      var number = Number(value);
+      if (!Number.isFinite(number)) return fallback;
+      return Math.max(min, Math.min(max, Math.round(number)));
+    }
 
     function readConfig() {
-      var out = {
-        contentDepth: DEFAULT_CONFIG.contentDepth,
-        calc: DEFAULT_CONFIG.calc,
-        frecency: DEFAULT_CONFIG.frecency,
-      };
+      var out = {};
+      for (var name in DEFAULT_CONFIG) out[name] = DEFAULT_CONFIG[name];
       try {
         var raw = window.localStorage.getItem(CONFIG_KEY);
         var parsed = raw ? JSON.parse(raw) : null;
         if (parsed && typeof parsed === 'object') {
-          if (Number.isFinite(parsed.contentDepth)) {
-            out.contentDepth = Math.max(4, Math.min(200, Math.round(parsed.contentDepth)));
+          out.contentDepth = clampInt(parsed.contentDepth, out.contentDepth, 4, 200);
+          out.resultLimit = clampInt(parsed.resultLimit, out.resultLimit, 8, 60);
+          for (var index = 0; index < CONFIG_FLAGS.length; index += 1) {
+            var key = CONFIG_FLAGS[index];
+            if (typeof parsed[key] === 'boolean') out[key] = parsed[key];
           }
-          if (typeof parsed.calc === 'boolean') out.calc = parsed.calc;
-          if (typeof parsed.frecency === 'boolean') out.frecency = parsed.frecency;
+          if (typeof parsed.hotkey === 'string' && HOTKEY_PATTERN.test(parsed.hotkey)) {
+            out.hotkey = parsed.hotkey;
+          }
         }
       } catch {
         /* a broken or absent record keeps the defaults */
@@ -319,11 +420,13 @@ window.__ModuleLoader__.load({
     function writeConfig(patch) {
       var next = readConfig();
       if (patch && typeof patch === 'object') {
-        if (Number.isFinite(patch.contentDepth)) {
-          next.contentDepth = Math.max(4, Math.min(200, Math.round(patch.contentDepth)));
+        if ('contentDepth' in patch) next.contentDepth = clampInt(patch.contentDepth, next.contentDepth, 4, 200);
+        if ('resultLimit' in patch) next.resultLimit = clampInt(patch.resultLimit, next.resultLimit, 8, 60);
+        for (var index = 0; index < CONFIG_FLAGS.length; index += 1) {
+          var key = CONFIG_FLAGS[index];
+          if (typeof patch[key] === 'boolean') next[key] = patch[key];
         }
-        if (typeof patch.calc === 'boolean') next.calc = patch.calc;
-        if (typeof patch.frecency === 'boolean') next.frecency = patch.frecency;
+        if (typeof patch.hotkey === 'string' && HOTKEY_PATTERN.test(patch.hotkey)) next.hotkey = patch.hotkey;
       }
       try {
         window.localStorage.setItem(CONFIG_KEY, JSON.stringify(next));
@@ -333,9 +436,39 @@ window.__ModuleLoader__.load({
       return next;
     }
 
-    // ---------------------------------------------------------------------
-    // query modes: one leading sigil switches what the list is made of
-    // ---------------------------------------------------------------------
+    /**
+     * The combination a keydown represents, in config notation ("mod+k").
+     * Requires one modifier so typing never rewrites the binding.
+     */
+    function hotkeyFromEvent(event) {
+      if (!event) return null;
+      var key = typeof event.key === 'string' ? event.key : '';
+      if (!key) return null;
+      var parts = [];
+      if (event.metaKey || event.ctrlKey) parts.push('mod');
+      if (event.altKey) parts.push('alt');
+      if (event.shiftKey) parts.push('shift');
+      if (!parts.length) return null;
+      var name = key.toLowerCase();
+      if (!/^(?:[a-z0-9]|f\d{1,2})$/.test(name)) return null;
+      return parts.join('+') + '+' + name;
+    }
+
+    /** Human form of a config hotkey: "mod+k" → "⌘K" / "Ctrl+K". */
+    function hotkeyLabel(value) {
+      var text = typeof value === 'string' && HOTKEY_PATTERN.test(value) ? value : DEFAULT_CONFIG.hotkey;
+      var parts = text.split('+');
+      var out = [];
+      for (var index = 0; index < parts.length; index += 1) {
+        var part = parts[index];
+        if (part === 'mod') out.push(MOD_KEY);
+        else if (part === 'alt') out.push(IS_MAC ? '⌥' : 'Alt');
+        else if (part === 'shift') out.push(IS_MAC ? '⇧' : 'Shift');
+        else out.push(part.length === 1 ? part.toUpperCase() : part);
+      }
+      return out.join(IS_MAC ? '' : '+');
+    }
+
     var MODES = {
       '>': 'command',
       '@': 'session',
@@ -776,8 +909,14 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------------
     // item helpers
     // ---------------------------------------------------------------------
-    function item(key, group, title, sub, run, actions) {
-      return { key: key, group: group, title: title, sub: sub || '', run: run, actions: actions || null };
+    function item(key, group, title, sub, run, actions, extra) {
+      var row = { key: key, group: group, title: title, sub: sub || '', run: run, actions: actions || null };
+      if (extra && typeof extra === 'object') {
+        for (var name in extra) {
+          if (Object.prototype.hasOwnProperty.call(extra, name)) row[name] = extra[name];
+        }
+      }
+      return row;
     }
 
     function copyText(text) {
@@ -800,7 +939,7 @@ window.__ModuleLoader__.load({
       return text;
     }
 
-    function sessionItem(ctx, lang, entry) {
+    function sessionItem(ctx, lang, entry, options) {
       var t = copy(lang);
       var id = entry.sessionId;
       var title = entry.title || t.untitled;
@@ -810,9 +949,10 @@ window.__ModuleLoader__.load({
         return undefined;
       };
       var actions = () => sessionActions(ctx, lang, entry);
-      var sub = entry.snippet || shortPath(entry.cwd);
-      if (seq !== null && entry.snippet) {
-        sub = t.hitAt.replace('{n}', String(seq)) + ' · ' + entry.snippet;
+      var snippet = options && options.snippets === false ? '' : entry.snippet;
+      var sub = snippet || shortPath(entry.cwd);
+      if (seq !== null && snippet) {
+        sub = t.hitAt.replace('{n}', String(seq)) + ' · ' + snippet;
       }
       var row = item(
         'session:' + id + (seq !== null ? ':' + seq : ''),
@@ -822,7 +962,7 @@ window.__ModuleLoader__.load({
         run,
         actions,
       );
-      if (entry.snippet) row.force = true;
+      if (snippet) row.force = true;
       return row;
     }
 
@@ -1029,10 +1169,162 @@ window.__ModuleLoader__.load({
       return { status: t.fontNow + ' ' + next };
     }
 
-    function buildActions(ctx, lang) {
+    // ---------------------------------------------------------------------
+    // settings: the palette configuring itself, one row per knob
+    // ---------------------------------------------------------------------
+
+    /**
+     * Rows for the settings panel. Every control writes through `apply`, so the
+     * host of this list decides where the value lands (localStorage + a state
+     * bump), and the panel rebuilds itself from the new config on the next pass.
+     */
+    function buildSettings(ctx, lang, apply) {
+      var t = copy(lang);
+      var config = readConfig();
+      var rows = [];
+      var save = typeof apply === 'function' ? apply : function (patch) { return writeConfig(patch); };
+      var onOff = function (value) { return value ? t.configOn : t.configOff; };
+
+      function flag(key, group, id, title, sub) {
+        var current = !!config[key];
+        rows.push(
+          item('set:' + id, group, title, sub, null, null, {
+            badge: onOff(current),
+            dot: current,
+            toggle: function () {
+              var patch = {};
+              patch[key] = !current;
+              var next = save(patch);
+              return { keep: true, status: title + ' · ' + onOff(next[key]) };
+            },
+          }),
+        );
+      }
+
+      function measure(group, id, title, sub, value, write, step, min, max) {
+        var size = step || 1;
+        var low = min === undefined ? 0 : min;
+        var high = max === undefined ? 9999 : max;
+        rows.push(
+          item(
+            'set:' + id,
+            group,
+            title,
+            sub,
+            function () {
+              return {
+                input: {
+                  title: title + ' · ' + low + '–' + high,
+                  value: String(value),
+                  submit: function (raw) {
+                    var parsed = Number(raw);
+                    if (!Number.isFinite(parsed)) return { keep: true, status: t.setHotkeyBad };
+                    write(parsed);
+                    return { keep: true };
+                  },
+                },
+              };
+            },
+            null,
+            {
+              badge: String(value),
+              adjust: function (delta) {
+                write(value + delta * size);
+              },
+            },
+          ),
+        );
+      }
+
+      flag('fullText', 'setSearch', 'fulltext', t.setFullText, config.fullText ? t.setFullTextOn : t.setFullTextOff);
+      measure('setSearch', 'depth', t.setDepth, t.setDepthSub, config.contentDepth, function (next) {
+        save({ contentDepth: next });
+      }, 1, 4, 200);
+      flag('snippets', 'setSearch', 'snippets', t.setSnippets, t.setSnippetsSub);
+      measure('setSearch', 'limit', t.setLimit, t.setLimitSub, config.resultLimit, function (next) {
+        save({ resultLimit: next });
+      }, 2, 8, 60);
+
+      flag('frecency', 'setBehavior', 'frecency', t.setFrecency, t.setFrecencySub);
+      flag('calc', 'setBehavior', 'calc', t.setCalc, t.setCalcSub);
+      flag('pluginCommands', 'setBehavior', 'plugins', t.setPlugins, t.setPluginsSub);
+      rows.push(
+        item('set:clear-recent', 'setBehavior', t.setClearRecent, t.setClearRecentSub, function () {
+          try {
+            window.localStorage.removeItem(RECENT_KEY);
+          } catch {
+            /* storage may be unavailable */
+          }
+          return { keep: true, status: t.setClearDone };
+        }),
+      );
+
+      measure('setLook', 'font', t.setFont, t.setFontSub + ' · ' + FONT_MIN + '–' + FONT_MAX, fontPx(), function (next) {
+        var value = clampInt(next, fontPx(), FONT_MIN, FONT_MAX);
+        try {
+          window.localStorage.setItem(FONT_KEY, String(value));
+        } catch {
+          /* ignore */
+        }
+        try {
+          ctx.theme.setFontSize('text', value);
+        } catch {
+          /* the theme service may be absent in tests */
+        }
+        save({});
+      }, 1, FONT_MIN, FONT_MAX);
+      rows.push(
+        item('set:theme', 'setLook', t.setTheme, t.setThemeSub, function () {
+          return { push: { title: t.setTheme, items: buildThemes(ctx, lang) } };
+        }),
+      );
+      rows.push(
+        item('set:lang', 'setLook', t.setLang, t.setLangSub, function () {
+          return { push: { title: t.setLang, items: buildLanguages(ctx, lang) } };
+        }),
+      );
+
+      rows.push(
+        item('set:hotkey', 'setKeys', t.setHotkey, t.setHotkeySub, function () {
+          return { capture: 'hotkey' };
+        }, null, { badge: hotkeyLabel(config.hotkey) }),
+      );
+
+      rows.push(
+        item('set:reset', 'setMaint', t.setReset, t.setResetSub, function () {
+          writeConfig(DEFAULT_CONFIG);
+          try {
+            window.localStorage.removeItem(FONT_KEY);
+          } catch {
+            /* ignore */
+          }
+          try {
+            ctx.theme.setFontSize('text', FONT_DEFAULT);
+          } catch {
+            /* ignore */
+          }
+          save({});
+          return { keep: true, status: t.setResetDone };
+        }),
+      );
+
+      return rows;
+    }
+
+    function buildActions(ctx, lang, apply) {
       var t = copy(lang);
       var config = readConfig();
       return [
+        item('cmd:settings', 'action', t.settings, t.settingsSub, function () {
+          return {
+            push: {
+              title: t.settings,
+              items: function () {
+                return buildSettings(ctx, lang, apply);
+              },
+            },
+          };
+        }),
         item('cmd:new', 'action', t.newSession, t.newSessionHint, () => {
           ctx.uiWorkspace.startSession();
           return undefined;
@@ -1259,7 +1551,21 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------------
     // root list
     // ---------------------------------------------------------------------
-    var GROUP_ORDER = ['recent', 'session', 'plugin', 'action', 'workspace', 'theme', 'system', 'ext'];
+    var GROUP_ORDER = [
+      'recent',
+      'session',
+      'plugin',
+      'action',
+      'workspace',
+      'theme',
+      'system',
+      'ext',
+      'setSearch',
+      'setBehavior',
+      'setLook',
+      'setKeys',
+      'setMaint',
+    ];
 
     function groupLabel(group, lang) {
       var t = copy(lang);
@@ -1270,6 +1576,11 @@ window.__ModuleLoader__.load({
       if (group === 'system') return t.system;
       if (group === 'plugin') return t.plugin;
       if (group === 'ext') return t.ext;
+      if (group === 'setSearch') return t.setSearch;
+      if (group === 'setBehavior') return t.setBehavior;
+      if (group === 'setLook') return t.setLook;
+      if (group === 'setKeys') return t.setKeys;
+      if (group === 'setMaint') return t.setMaint;
       return t.recent;
     }
 
@@ -1325,7 +1636,7 @@ window.__ModuleLoader__.load({
         // keystrokes never wait for the Host. Content hits arrive separately.
         var requested = needle ? catalogRows : catalogRows.slice(0, 5);
         requested.forEach(function (entry) {
-          var row = sessionItem(ctx, lang, entry);
+          var row = sessionItem(ctx, lang, entry, { snippets: config.snippets });
           if (needle && scoreOf(needle, row) <= 0) return;
           seenSessions.add(entry.sessionId);
           sessionRows.push(row);
@@ -1334,7 +1645,7 @@ window.__ModuleLoader__.load({
           hitRows.forEach(function (entry) {
             if (seenSessions.has(entry.sessionId)) return;
             seenSessions.add(entry.sessionId);
-            var row = sessionItem(ctx, lang, entry);
+            var row = sessionItem(ctx, lang, entry, { snippets: config.snippets });
             row.force = true;
             sessionRows.push(row);
           });
@@ -1346,11 +1657,13 @@ window.__ModuleLoader__.load({
 
       if (wantCommand) {
         if (!only.provider) {
-          pluginRows
-            .slice(0, needle ? pluginRows.length : 6)
-            .forEach((plugin) => items.push(pluginItem(ctx, lang, plugin, reloadPlugins)));
-          buildActions(ctx, lang).forEach((entry) => items.push(entry));
-          extRows.forEach((command) => items.push(extItem(ctx, lang, command)));
+          if (config.pluginCommands !== false) {
+            pluginRows
+              .slice(0, needle ? pluginRows.length : 6)
+              .forEach((plugin) => items.push(pluginItem(ctx, lang, plugin, reloadPlugins)));
+            extRows.forEach((command) => items.push(extItem(ctx, lang, command)));
+          }
+          buildActions(ctx, lang, options.apply).forEach((entry) => items.push(entry));
         }
         providerRows.forEach((provider) => {
           if (only.provider && provider !== only.provider) return;
@@ -1536,6 +1849,11 @@ window.__ModuleLoader__.load({
       var key = String(entry.key || '');
       if (/:toggle$/.test(key)) return 'power';
       if (/:dir$/.test(key)) return 'folder';
+      if (key.indexOf('set:theme') === 0) return 'theme';
+      if (key.indexOf('set:lang') === 0) return 'globe';
+      if (key.indexOf('set:reset') === 0) return 'refresh';
+      if (key.indexOf('set:clear-recent') === 0) return 'archive';
+      if (key.indexOf('set:') === 0) return 'system';
       if (key.indexOf('theme:') === 0) return 'theme';
       if (key.indexOf('lang:') === 0) return 'globe';
       if (key.indexOf('plugin:') === 0) return 'plugin';
@@ -1828,6 +2146,7 @@ window.__ModuleLoader__.load({
       var [configState, setConfigState] = useState(() => readConfig());
       var [extHits, setExtHits] = useState([]);
       var [version, setVersion] = useState(VERSION);
+      var [capturing, setCapturing] = useState(false);
       var ext = useExtCommands();
       var providerList = useProviders();
       var parsed = parseQuery(query);
@@ -1929,8 +2248,10 @@ window.__ModuleLoader__.load({
         var timer = setTimeout(
           () => {
             setCatalog((prev) => (prev.items.length ? prev : { items: [], hits: [], hitsFor: '', loading: true }));
-            var params = '?limit=24&depth=' + String(configState.contentDepth);
-            getJson(API + '/sessions' + params + (needle ? '&q=' + encodeURIComponent(needle) : ''))
+            var needleForHost = configState.fullText === false ? '' : needle;
+            var params =
+              '?limit=' + String(configState.resultLimit) + '&depth=' + String(configState.contentDepth);
+            getJson(API + '/sessions' + params + (needleForHost ? '&q=' + encodeURIComponent(needleForHost) : ''))
               .then((payload) => {
                 if (!alive) return;
                 var live = (payload.items || []).filter((entry) => !archived[entry.sessionId]);
@@ -2030,6 +2351,9 @@ window.__ModuleLoader__.load({
       else if (parsed.mode === 'file') placeholder = t.modeFile;
       else if (parsed.mode === 'calc') placeholder = t.modeCalc;
       else if (parsed.mode === 'help') placeholder = t.modeHelp;
+      var stackTop = stack.length ? stack[stack.length - 1] : null;
+      // A sub-panel owns the input: show its name so the user knows where they are.
+      if (stackTop && !query) placeholder = stackTop.title;
 
       var root;
       try {
@@ -2039,6 +2363,7 @@ window.__ModuleLoader__.load({
           extHits: extHits,
           config: configState,
           version: version,
+          apply: applyConfig,
         });
       } catch (error) {
         // Rendering this palette must never take the shell down: an unexpected
@@ -2047,7 +2372,8 @@ window.__ModuleLoader__.load({
         root = [];
       }
       var current = stack.length ? stack[stack.length - 1] : null;
-      var items = input ? [] : current ? current.items : root;
+      var currentItems = current ? (typeof current.items === 'function' ? current.items() : current.items) : null;
+      var items = input ? [] : currentItems || root;
       var active = Math.min(index, Math.max(items.length - 1, 0));
 
       function close() {
@@ -2092,6 +2418,13 @@ window.__ModuleLoader__.load({
         if (next) setRecent(next);
       }
 
+      /** Single funnel for settings writes: persist, then re-render from disk. */
+      function applyConfig(patch) {
+        var next = writeConfig(patch);
+        setConfigState(next);
+        return next;
+      }
+
       function settle(result) {
         setConfigState(readConfig());
         if (!result) {
@@ -2105,7 +2438,16 @@ window.__ModuleLoader__.load({
           setStatus(null);
           return;
         }
-        if (result.push && Array.isArray(result.push.items)) {
+        if (typeof result.capture === 'string') {
+          setCapturing(true);
+          setStatus(t.setHotkeyWait);
+          return;
+        }
+        if (result.keep) {
+          setStatus(result.status || null);
+          return;
+        }
+        if (result.push && result.push.items) {
           setStack(stack.concat([{ title: result.push.title || '', items: result.push.items }]));
           setIndex(0);
           setStatus(null);
@@ -2127,10 +2469,11 @@ window.__ModuleLoader__.load({
 
       function run(entry) {
         if (!entry || busy) return;
+        if (typeof entry.toggle !== 'function' && typeof entry.run !== 'function') return;
         remember(entry.key);
         var result;
         try {
-          result = entry.run();
+          result = typeof entry.toggle === 'function' ? entry.toggle() : entry.run();
         } catch (error) {
           setStatus(t.failed + t.failedSep + String((error && error.message) || error));
           return;
@@ -2192,6 +2535,24 @@ window.__ModuleLoader__.load({
         if (event.isComposing || (event.nativeEvent && event.nativeEvent.isComposing) || event.keyCode === 229) {
           return;
         }
+        if (capturing) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.key === 'Escape') {
+            setCapturing(false);
+            setStatus(null);
+            return;
+          }
+          var combo = hotkeyFromEvent(event);
+          if (!combo) {
+            setStatus(t.setHotkeyBad);
+            return;
+          }
+          applyConfig({ hotkey: combo });
+          setCapturing(false);
+          setStatus(t.setHotkeyDone + ' · ' + hotkeyLabel(combo));
+          return;
+        }
         if (event.key === 'Escape') {
           event.preventDefault();
           event.stopPropagation();
@@ -2222,6 +2583,13 @@ window.__ModuleLoader__.load({
         if (event.key === 'ArrowUp') {
           event.preventDefault();
           if (items.length) setIndex((active - 1 + items.length) % items.length);
+          return;
+        }
+        if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && items[active]
+          && typeof items[active].adjust === 'function') {
+          event.preventDefault();
+          var direction = event.key === 'ArrowRight' ? 1 : -1;
+          items[active].adjust(event.shiftKey ? direction * 10 : direction);
           return;
         }
         if (event.key === 'ArrowRight' || event.key === 'Tab') {
@@ -2462,15 +2830,47 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: fieldStyle },
-            h(Icon, { name: 'search', size: 17 }),
+            current
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    onClick: () => {
+                      setStack(stack.slice(0, -1));
+                      setIndex(0);
+                    },
+                    title: t.hintBack,
+                    'aria-label': t.hintBack,
+                    style: {
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: 26,
+                      height: 26,
+                      padding: 0,
+                      border: 0,
+                      borderRadius: 7,
+                      background: 'transparent',
+                      color: C.sub,
+                      cursor: 'pointer',
+                      flex: '0 0 auto',
+                    },
+                  },
+                  h(Icon, { name: 'back', size: 16 }),
+                )
+              : h(Icon, { name: 'search', size: 17 }),
             h('input', {
               ref: inputRef,
               value: query,
               placeholder: placeholder,
               className: 'dsh-cmdk-input',
               onChange: (event) => {
-                setQuery(event.target.value);
+                var next = event.target.value;
+                setQuery(next);
                 setIndex(0);
+                // Typing means "search everything again": a sub-panel (actions,
+                // settings, help) would otherwise swallow the keystrokes.
+                if (next && stack.length) setStack([]);
               },
               onFocus: () => setFocused(true),
               onBlur: () => setFocused(false),
@@ -2573,6 +2973,17 @@ window.__ModuleLoader__.load({
         var hints;
         if (!items.length) {
           hints = [['esc', t.hintClose]];
+        } else if (current && items[active] && typeof items[active].adjust === 'function') {
+          hints = [
+            ['← →', t.adjustHint],
+            ['⇧', '×10'],
+            ['esc', t.hintClose],
+          ];
+        } else if (current && items[active] && typeof items[active].toggle === 'function') {
+          hints = [
+            ['↵', t.toggleHint],
+            ['esc', t.hintClose],
+          ];
         } else if (current) {
           hints = [
             ['↵', t.hintRun],
@@ -2819,7 +3230,29 @@ window.__ModuleLoader__.load({
               )
             : null,
         ),
-        active ? h(Kbd, null, '↵') : null,
+        entry.adjust ? h('span', { style: { flex: '0 0 auto', fontSize: 10.5, color: C.sub, opacity: 0.7, letterSpacing: '.02em' } }, '‹ ›') : null,
+        entry.badge
+          ? h(
+              'span',
+              {
+                style: {
+                  flex: '0 0 auto',
+                  minWidth: 24,
+                  padding: '2px 6px',
+                  borderRadius: 6,
+                  textAlign: 'center',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  fontVariantNumeric: 'tabular-nums',
+                  color: active ? mix(C.brand, 45) : C.sub,
+                  background: mix(C.brand, active ? 11 : 5, C.layerAlt),
+                  boxShadow: 'inset 0 0 0 1px ' + mix(C.brand, active ? 18 : 8),
+                },
+              },
+              entry.badge,
+            )
+          : null,
+        active && typeof entry.run === 'function' && typeof entry.toggle !== 'function' ? h(Kbd, null, '↵') : null,
         entry.actions
           ? h(
               'button',
@@ -2865,7 +3298,7 @@ window.__ModuleLoader__.load({
         {
           type: 'button',
           onClick: () => store.toggle(),
-          title: HOTKEY,
+          title: hotkeyLabel(readConfig().hotkey),
           onMouseEnter: () => setHover(true),
           onMouseLeave: () => setHover(false),
           style: {
@@ -2892,7 +3325,7 @@ window.__ModuleLoader__.load({
           { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
           t.footer || '搜索',
         ),
-        h(Kbd, null, HOTKEY),
+        h(Kbd, null, hotkeyLabel(readConfig().hotkey)),
       );
     }
 
@@ -2904,9 +3337,9 @@ window.__ModuleLoader__.load({
     var hotkey = false;
 
     function onKey(event) {
-      var mod = event.metaKey || event.ctrlKey;
-      if (!mod || event.altKey) return;
-      if (String(event.key || '').toLowerCase() !== 'k') return;
+      if (event.defaultPrevented) return;
+      var binding = readConfig().hotkey;
+      if (hotkeyFromEvent(event) !== binding) return;
       event.preventDefault();
       event.stopPropagation();
       store.toggle();

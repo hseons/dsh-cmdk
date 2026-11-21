@@ -1,6 +1,6 @@
 {
   "name": "dsh-cmdk",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "type": "module",
   "description": "⌘K command palette for DeepSeek Harness: search sessions and message content (with message-level jumps), run commands, extend via providers.",
   "icon": "icon.svg",
