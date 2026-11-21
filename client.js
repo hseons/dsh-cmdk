@@ -25,7 +25,7 @@ window.__ModuleLoader__.load({
     var IS_MAC = /Mac|iPhone|iPad|iPod/.test(String(navigator.platform || navigator.userAgent || ''));
     var MOD_KEY = IS_MAC ? '⌘' : 'Ctrl';
     var HOTKEY = MOD_KEY + 'K';
-    var VERSION = '0.4.2';
+    var VERSION = '0.4.3';
 
     var C = {
       text: 'var(--dsw-alias-label-primary)',
