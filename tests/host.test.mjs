@@ -1,4 +1,7 @@
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { apply } from '../index.js';
 
 const require = createRequire(import.meta.url);
@@ -109,6 +112,67 @@ try {
 
   const bad = await call('/cmdk/message', 'sessionId=s2');
   check.ok('message 400', bad.status === 400, bad);
+
+  // --- /cmdk/files: a real temporary tree, scanned for real -------------
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cmdk-files-'));
+  const write = (rel) => {
+    const full = path.join(root, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, 'x'.repeat(rel.length));
+  };
+  write('README.md');
+  write('src/app.js');
+  write('src/lib/util.mjs');
+  write('deep/one/two/three.js');
+  write('node_modules/pkg/index.js');
+  write('.git/config');
+  write('.github/workflow.yml');
+
+  const browse = await call('/cmdk/files', 'root=' + encodeURIComponent(root));
+  check.ok('files browse ok', browse.status === 200, browse.body);
+  check.ok('files browse returns the root', browse.body.root === fs.realpathSync(root), browse.body.root);
+  check.ok('browse lists folders first', browse.body.items[0].kind === 'dir', browse.body.items.map((i) => i.name));
+  check.ok('browse keeps top-level files', browse.body.items.some((i) => i.name === 'README.md'), browse.body.items);
+  check.ok('browse does not recurse', !browse.body.items.some((i) => i.name === 'app.js'), browse.body.items.map((i) => i.name));
+  check.ok('browse drops node_modules', !browse.body.items.some((i) => i.name === 'node_modules'), browse.body.items.map((i) => i.name));
+  check.ok('browse drops .git but keeps .github', browse.body.items.some((i) => i.name === '.github') && !browse.body.items.some((i) => i.name === '.git'), browse.body.items.map((i) => i.name));
+
+  const hit = await call('/cmdk/files', 'root=' + encodeURIComponent(root) + '&q=app');
+  check.ok('files search finds a nested file', hit.body.items.some((i) => i.rel === 'src/app.js'), hit.body.items);
+  check.ok('files search reports the relative dir', hit.body.items.find((i) => i.rel === 'src/app.js').relDir === 'src', hit.body.items);
+  check.ok('files search carries size and mtime', hit.body.items.find((i) => i.rel === 'src/app.js').size > 0, hit.body.items);
+  check.ok('files search skips node_modules', !hit.body.items.some((i) => i.rel.includes('node_modules')), hit.body.items);
+  check.ok('files search keeps dot-folders on the allowlist', (await call('/cmdk/files', 'root=' + encodeURIComponent(root) + '&q=workflow')).body.items.some((i) => i.rel === '.github/workflow.yml'), null);
+
+  // Abbreviations still match, but only while the letters stay together:
+  // `rdm` finds README.md, `rdm` must not pull in every long file name.
+  const abbrev = await call('/cmdk/files', 'root=' + encodeURIComponent(root) + '&q=rdm');
+  check.ok('abbreviations match a compact subsequence', abbrev.body.items.some((i) => i.name === 'README.md'), abbrev.body.items);
+  check.ok('sparse subsequences are dropped', !abbrev.body.items.some((i) => i.name === 'util.mjs'), abbrev.body.items);
+
+  const exact = await call('/cmdk/files', 'root=' + encodeURIComponent(root) + '&q=README.md');
+  check.ok('basename exact match ranks first', exact.body.items[0].rel === 'README.md', exact.body.items.map((i) => i.rel));
+
+  const shallow = await call('/cmdk/files', 'root=' + encodeURIComponent(root) + '&q=three&depth=1');
+  check.ok('depth caps the walk', !shallow.body.items.some((i) => i.rel === 'deep/one/two/three.js'), shallow.body.items);
+  const deep = await call('/cmdk/files', 'root=' + encodeURIComponent(root) + '&q=three&depth=6');
+  check.ok('depth reaches the file', deep.body.items.some((i) => i.rel === 'deep/one/two/three.js'), deep.body.items);
+
+  const capped = await call('/cmdk/files', 'root=' + encodeURIComponent(root) + '&q=e&limit=1');
+  check.ok('limit caps the answer', capped.body.items.length === 1 && capped.body.truncated === true, capped.body);
+
+  const rel = await call('/cmdk/files', 'root=' + encodeURIComponent('relative/path'));
+  check.ok('relative root rejected', rel.status === 400, rel);
+  const gone = await call('/cmdk/files', 'root=' + encodeURIComponent(path.join(root, 'nope')));
+  check.ok('missing root rejected', gone.status === 400, gone);
+
+  const dflt = await call('/cmdk/files');
+  check.ok('root defaults without a param', dflt.status === 200 && !!dflt.body.root, dflt.body);
+  check.ok('default root is absolute', path.isAbsolute(dflt.body.root), dflt.body.root);
+
+  const getOnly = await call('/cmdk/open-profile', '', 'GET');
+  check.ok('open-profile stays POST only', getOnly.status === 405, getOnly);
+  fs.rmSync(root, { recursive: true, force: true });
 
   check.finish();
 } catch (error) {

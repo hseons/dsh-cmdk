@@ -1,6 +1,6 @@
 {
   "name": "dsh-cmdk",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "type": "module",
   "scripts": {
     "test": "node tests/run.cjs",

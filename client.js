@@ -21,6 +21,9 @@ window.__ModuleLoader__.load({
 
     var API = '/cmdk';
     var RECENT_KEY = 'dsh-cmdk/recent';
+    var FILE_ROOT_KEY = 'dsh-cmdk/file-root';
+    var FILE_RECENT_KEY = 'dsh-cmdk/files';
+    var FILE_RECENT_MAX = 24;
     var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     var IS_MAC = /Mac|iPhone|iPad|iPod/.test(String(navigator.platform || navigator.userAgent || ''));
     var MOD_KEY = IS_MAC ? '⌘' : 'Ctrl';
@@ -123,8 +126,35 @@ window.__ModuleLoader__.load({
         modeAll: '搜索会话、工作区，或输入 > @ # / = ? 切换模式',
         modeCommand: '只搜命令',
         modeSession: '只搜会话（标题与正文）',
+        modeFile: '搜索文件名或路径，↵ 进入文件夹',
+        fileGroup: '文件',
+        fileLoading: '正在读取文件…',
+        fileError: '读取失败',
+        fileNoRoot: '还没有根目录',
+        fileNoRootSub: '按 ↵ 选一个文件夹开始',
+        fileRoot: '当前根目录',
+        fileRootSub: '输入关键字搜文件，↵ 进入文件夹',
+        fileChangeRoot: '切换根目录…',
+        fileChangeRootSub: '选一个文件夹作为搜索起点',
+        fileParent: '上级目录',
+        fileParentSub: '回到 {path}',
+        fileInsert: '插入引用',
+        fileInserted: '已插入到输入框',
+        fileCopyPath: '复制绝对路径',
+        fileCopyRel: '复制相对路径',
+        fileReveal: '在访达中显示',
+        fileRevealSub: '打开所在文件夹并选中这个文件',
+        fileOpenDir: '打开所在文件夹',
+        fileUseAsRoot: '以此为根目录',
+        fileEmpty: '没有匹配的文件',
+        fileEmptySub: '试试更短的关键字，或切换根目录',
+        fileTruncated: '结果已截断',
+        fileTruncatedSub: '目录太大或太深，关键字再窄一点',
+        fileRecentHit: '最近用过',
+        fileDir: '文件夹',
+        fileRootChanged: '根目录已切换',
+        fileDesktopOnly: '文件搜索需要桌面端 Host',
         modeWorkspace: '只搜工作区',
-        modeFile: '搜索文件路径',
         modeCalc: '输入算式，回车复制结果',
         modeHelp: '键盘、模式与扩展命令',
         helpTitle: '帮助',
@@ -330,8 +360,35 @@ window.__ModuleLoader__.load({
         modeAll: 'Search sessions and workspaces, or type > @ # / = ? for a mode',
         modeCommand: 'Commands only',
         modeSession: 'Sessions only (titles and messages)',
+        modeFile: 'Search file names or paths — ↵ opens a folder',
+        fileGroup: 'Files',
+        fileLoading: 'Reading files…',
+        fileError: 'Read failed',
+        fileNoRoot: 'No root folder yet',
+        fileNoRootSub: 'Press ↵ to pick a folder',
+        fileRoot: 'Search root',
+        fileRootSub: 'Type to search files, ↵ opens a folder',
+        fileChangeRoot: 'Change root folder…',
+        fileChangeRootSub: 'Pick where file search starts',
+        fileParent: 'Parent folder',
+        fileParentSub: 'Back to {path}',
+        fileInsert: 'Insert reference',
+        fileInserted: 'Inserted into the composer',
+        fileCopyPath: 'Copy absolute path',
+        fileCopyRel: 'Copy relative path',
+        fileReveal: 'Reveal in Finder',
+        fileRevealSub: 'Open the folder and select this file',
+        fileOpenDir: 'Open containing folder',
+        fileUseAsRoot: 'Use as root folder',
+        fileEmpty: 'No matching files',
+        fileEmptySub: 'Try a shorter keyword, or change the root folder',
+        fileTruncated: 'Results truncated',
+        fileTruncatedSub: 'Folder is large or deep — narrow the keyword',
+        fileRecentHit: 'Recently used',
+        fileDir: 'Folder',
+        fileRootChanged: 'Root folder changed',
+        fileDesktopOnly: 'File search needs the desktop host',
         modeWorkspace: 'Workspaces only',
-        modeFile: 'Search file paths',
         modeCalc: 'Type an expression, ↵ copies the result',
         modeHelp: 'Keys, modes and extension commands',
         helpTitle: 'Help',
@@ -1023,6 +1080,71 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ---------------------------------------------------------------------
+    // file memory: where `/` starts, and which files were worth reopening
+    // ---------------------------------------------------------------------
+    function readFileRoot() {
+      try {
+        var value = window.localStorage.getItem(FILE_ROOT_KEY);
+        return typeof value === 'string' ? value : '';
+      } catch {
+        return '';
+      }
+    }
+
+    function writeFileRoot(value) {
+      try {
+        if (value) window.localStorage.setItem(FILE_ROOT_KEY, String(value));
+        else window.localStorage.removeItem(FILE_ROOT_KEY);
+      } catch {
+        /* storage may be unavailable in private mode */
+      }
+    }
+
+    function readFileRecent() {
+      try {
+        var raw = window.localStorage.getItem(FILE_RECENT_KEY);
+        var parsed = raw ? JSON.parse(raw) : null;
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter((row) => row && typeof row.path === 'string' && row.path);
+      } catch {
+        return [];
+      }
+    }
+
+    function bumpFileRecent(path, rel, name) {
+      if (!path) return [];
+      try {
+        var rows = readFileRecent().filter((row) => row.path !== path);
+        rows.unshift({ path: path, rel: rel || '', name: name || '', at: Date.now() });
+        rows = rows.slice(0, FILE_RECENT_MAX);
+        window.localStorage.setItem(FILE_RECENT_KEY, JSON.stringify(rows));
+        return rows;
+      } catch {
+        return [];
+      }
+    }
+
+    function formatSize(bytes) {
+      var size = Number(bytes) || 0;
+      if (size < 1024) return size + ' B';
+      if (size < 1024 * 1024) return (size / 1024).toFixed(size < 10240 ? 1 : 0) + ' KB';
+      if (size < 1024 * 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + ' MB';
+      return (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+    }
+
+    function dirOf(value) {
+      var text = typeof value === 'string' ? value : '';
+      var at = text.lastIndexOf('/');
+      return at > 0 ? text.slice(0, at) : text;
+    }
+
+    function baseOf(value) {
+      var text = typeof value === 'string' ? value : '';
+      var at = text.lastIndexOf('/');
+      return at >= 0 ? text.slice(at + 1) : text;
+    }
+
     /**
      * Frecency: how often it was used, discounted by a one-week half-life.
      * A brand-new action (count 1) beats something used twice a month ago.
@@ -1073,8 +1195,10 @@ window.__ModuleLoader__.load({
       return Promise.reject(new Error('clipboard unavailable'));
     }
 
-    function revealPath(path) {
-      return request(API + '/open-profile', { path: path }).then(() => null);
+    function revealPath(path, options) {
+      var body = { path: path };
+      if (options && options.reveal) body.reveal = true;
+      return request(API + '/open-profile', body).then(() => null);
     }
 
     function shortPath(value) {
@@ -2175,6 +2299,7 @@ window.__ModuleLoader__.load({
     // root list
     // ---------------------------------------------------------------------
     var GROUP_ORDER = [
+      'file',
       'recent',
       'session',
       'plugin',
@@ -2192,6 +2317,7 @@ window.__ModuleLoader__.load({
 
     function groupLabel(group, lang) {
       var t = copy(lang);
+      if (group === 'file') return t.fileGroup;
       if (group === 'session') return t.session;
       if (group === 'workspace') return t.workspace;
       if (group === 'action') return t.action;
@@ -2241,6 +2367,192 @@ window.__ModuleLoader__.load({
       });
     }
 
+    // ---------------------------------------------------------------------
+    // `/` file mode — the Host indexes one root, this half renders and acts
+    // ---------------------------------------------------------------------
+    /** The workspace a path belongs to, so an inserted `@file` lands in it. */
+    function workspaceForPath(workspaces, target) {
+      var list = Array.isArray(workspaces) ? workspaces : [];
+      // Windows reports backslashes; compare every path on one separator.
+      var path = String(target == null ? '' : target).replace(/\\/g, '/');
+      var best = null;
+      list.forEach((workspace) => {
+        var base = workspace && workspace.path ? String(workspace.path).replace(/\\/g, '/').replace(/\/+$/, '') : '';
+        if (!base || base === '/') return;
+        if (path === base || path.indexOf(base + '/') === 0) {
+          if (!best || base.length > best.base.length) best = { workspace: workspace, base: base };
+        }
+      });
+      return best ? best.workspace : null;
+    }
+
+    function insertFileRef(ctx, lang, entry, workspaces, root) {
+      var t = copy(lang);
+      var rel = entry.rel || entry.name;
+      // Attribute the draft to the workspace that owns the file, not to the
+      // search root: one root can hold several workspaces underneath it.
+      var workspace = workspaceForPath(workspaces, entry.path || root);
+      return Promise.resolve(
+        ctx.uiWorkspace.startSession(workspace ? workspace.workspaceId : undefined, {
+          prompt: '@' + rel + ' ',
+          whenDraftExists: 'append',
+        }),
+      ).then(() => {
+        bumpFileRecent(entry.path, rel, entry.name);
+        return { status: t.fileInserted + ' · @' + rel };
+      });
+    }
+
+    function fileItem(ctx, lang, entry, root, workspaces, prefix) {
+      var t = copy(lang);
+      var isDir = entry.kind === 'dir';
+      var key = (prefix || 'file:') + entry.path;
+      var rel = entry.rel || entry.name;
+      var subParts = [];
+      if (entry.recent) {
+        subParts.push(t.fileRecentHit);
+        var used = relativeTime(lang, entry.hitAt);
+        if (used) subParts.push(used);
+      } else if (isDir) {
+        subParts.push(t.fileDir);
+        if (entry.relDir) subParts.push(shortPath(entry.relDir));
+      } else {
+        if (entry.relDir) subParts.push(shortPath(entry.relDir));
+        if (entry.size) subParts.push(formatSize(entry.size));
+        var stamp = relativeTime(lang, entry.mtime);
+        if (stamp) subParts.push(stamp);
+      }
+
+      var run;
+      var actions;
+      if (isDir) {
+        run = () => {
+          writeFileRoot(entry.path);
+          return { fileRoot: entry.path, query: '/' };
+        };
+        actions = () => [
+          item(key + ':root', 'file', t.fileUseAsRoot, shortPath(entry.path), run, null),
+          item(key + ':open', 'file', t.fileOpenDir, entry.name, () => revealPath(entry.path), null),
+          item(key + ':copy', 'file', t.fileCopyPath, shortPath(entry.path), () => copyText(entry.path).then(() => ({ status: t.copied })), null),
+        ];
+      } else {
+        run = () => insertFileRef(ctx, lang, entry, workspaces, root);
+        actions = () => [
+          item(key + ':insert', 'file', t.fileInsert, '@' + rel, run, null),
+          item(key + ':copy', 'file', t.fileCopyPath, shortPath(entry.path), () => copyText(entry.path).then(() => ({ status: t.copied })), null),
+          item(key + ':copyrel', 'file', t.fileCopyRel, rel, () => copyText(rel).then(() => ({ status: t.copied })), null),
+          item(key + ':reveal', 'file', t.fileReveal, t.fileRevealSub, () => revealPath(entry.path, { reveal: true }), null),
+          item(key + ':open', 'file', t.fileOpenDir, shortPath(dirOf(entry.path)), () => revealPath(dirOf(entry.path)), null),
+        ];
+      }
+
+      return item(key, 'file', isDir ? entry.name + '/' : entry.name, subParts.join(' · '), run, actions, {
+        dir: isDir,
+        filePath: entry.path,
+        badge: isDir ? undefined : '@',
+      });
+    }
+
+    /** `/cmdk/files` URL for one root + needle. Exported for the URL-shape test. */
+    function fileSearchUrl(root, text) {
+      var tail = 'limit=60' + (text ? '&q=' + encodeURIComponent(text) : '');
+      return '/cmdk/files?' + (root ? 'root=' + encodeURIComponent(root) + '&' : '') + tail;
+    }
+
+    function buildFiles(ctx, lang, needle, state, workspaces) {
+      var t = copy(lang);
+      var info = state || {};
+      var query = String(needle == null ? '' : needle).trim();
+      var root = info.root || readFileRoot();
+      var rows = [];
+
+      var pickRoot = () => {
+        var picked;
+        try {
+          picked = ctx.uiWorkspace.pickDirectory();
+        } catch (error) {
+          return Promise.reject(error);
+        }
+        return Promise.resolve(picked).then((value) => {
+          // Cancelling the system dialog must leave the palette open.
+          if (!value) return { keep: true };
+          writeFileRoot(String(value));
+          return { fileRoot: String(value), query: '/' };
+        });
+      };
+
+      if (!root) {
+        rows.push(item('file:no-root', 'file', t.fileNoRoot, t.fileNoRootSub, pickRoot, null));
+      } else if (!query) {
+        rows.push(
+          item('file:root', 'file', t.fileRoot, shortPath(root), pickRoot, () => [
+            item('file:root:open', 'file', t.fileOpenDir, shortPath(root), () => revealPath(root), null),
+            item('file:root:copy', 'file', t.fileCopyPath, shortPath(root), () => copyText(root).then(() => ({ status: t.copied })), null),
+          ]),
+        );
+        rows.push(item('file:choose', 'file', t.fileChangeRoot, t.fileChangeRootSub, pickRoot, null));
+        var at = root.replace(/\/+$/, '').lastIndexOf('/');
+        var parent = at > 0 ? root.replace(/\/+$/, '').slice(0, at) : '';
+        if (parent && parent !== root) {
+          rows.push(
+            item('file:parent', 'file', t.fileParent, t.fileParentSub.replace('{path}', shortPath(parent)), () => {
+              writeFileRoot(parent);
+              return { fileRoot: parent, query: '/' };
+            }, null),
+          );
+        }
+
+        readFileRecent().forEach((hit) => {
+          if (!hit.path) return;
+          rows.push(
+            fileItem(
+              ctx,
+              lang,
+              {
+                kind: 'file',
+                name: hit.name || baseOf(hit.path),
+                path: hit.path,
+                rel: hit.rel || baseOf(hit.path),
+                relDir: dirOf(hit.rel || ''),
+                mtime: 0,
+                hitAt: hit.at,
+                recent: true,
+              },
+              root,
+              workspaces,
+              'file:recent:',
+            ),
+          );
+        });
+      }
+
+      // Results carry the needle they answered; showing them under a newer
+      // needle would flash unrelated files for one debounce window.
+      var fresh = info.for === query;
+      var items = fresh && Array.isArray(info.items) ? info.items : [];
+      var pending = !!info.loading || !fresh;
+
+      if (info.error && fresh) {
+        rows.push(item('file:error', 'file', t.fileError, String(info.error), null, null));
+      }
+      if (pending && !items.length) {
+        rows.push(item('file:loading', 'file', t.fileLoading, shortPath(root), null, null));
+      }
+
+      items.forEach((entry) => {
+        if (!entry || !entry.path) return;
+        rows.push(fileItem(ctx, lang, entry, root, workspaces));
+      });
+
+      if (!pending && !info.error && root && !items.length) {
+        rows.push(item('file:empty', 'file', t.fileEmpty, t.fileEmptySub, null, null));
+      }
+      if (info.truncated) {
+        rows.push(item('file:truncated', 'file', t.fileTruncated, t.fileTruncatedSub, null, null));
+      }
+      return rows;
+    }
+
     function buildRoot(ctx, lang, query, catalog, hits, workspaces, recent, plugins, ext, reloadPlugins, extra) {
       var t = copy(lang);
       var items = [];
@@ -2250,6 +2562,11 @@ window.__ModuleLoader__.load({
       var parsed = options.parsed && typeof options.parsed === 'object' ? options.parsed : parseQuery(text);
       var mode = parsed.mode || 'all';
       var needle = mode === 'all' ? text : parsed.text;
+      // The file panel ranks on the Host already; re-scoring it locally would
+      // reorder path hits by title fuzzy match and lose the directory context.
+      if (mode === 'file') {
+        return buildFiles(ctx, lang, needle, options.files, workspaces);
+      }
       var config = options.config && typeof options.config === 'object' ? options.config : DEFAULT_CONFIG;
       var parked = Array.isArray(config.disabledProviders) ? config.disabledProviders : [];
       var providerRows = (Array.isArray(options.providers) ? options.providers : []).filter(
@@ -2518,6 +2835,10 @@ window.__ModuleLoader__.load({
         ['circle', { cx: 12, cy: 12, r: 9 }],
         ['path', { d: 'M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9S14.5 18.3 12 21c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z' }],
       ],
+      file: [
+        ['path', { d: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z' }],
+        ['path', { d: 'M14 3v5h5M9 13h6M9 17h4' }],
+      ],
       check: [['path', { d: 'm20 6-11 11-5-5' }]],
       x: [['path', { d: 'M18 6 6 18M6 6l12 12' }]],
     };
@@ -2541,7 +2862,7 @@ window.__ModuleLoader__.load({
       setLook: '#ec4899',
       setKeys: '#f59e0b',
       setMaint: '#64748b',
-      file: '#0ea5e9',
+      file: '#06b6d4',
       help: '#8b5cf6',
       calc: '#14b8a6',
     };
@@ -2622,6 +2943,8 @@ window.__ModuleLoader__.load({
       if (key.indexOf('lang:') === 0) return 'globe';
       if (key.indexOf('plugin:') === 0) return 'plugin';
       if (key.indexOf('workspace:') === 0) return 'workspace';
+      if (key === 'file:root' || key === 'file:choose' || key === 'file:parent' || key === 'file:no-root') return 'folder';
+      if (key.indexOf('file:') === 0) return entry && entry.dir ? 'folder' : 'file';
       if (key.indexOf('session:') === 0) return 'session';
       if (key.indexOf('ext:') === 0) return 'ext';
       if (key.indexOf('cmd:reload') === 0) return 'refresh';
@@ -2914,6 +3237,8 @@ window.__ModuleLoader__.load({
       var [extHits, setExtHits] = useState([]);
       var [version, setVersion] = useState(VERSION);
       var [capturing, setCapturing] = useState(false);
+      var [fileRoot, setFileRoot] = useState(() => readFileRoot());
+      var [fileState, setFileState] = useState({ root: '', items: [], loading: false, for: '', truncated: false, error: '' });
       // Closing the panel mid-capture must not leave the global listener muted.
       useEffect(() => {
         if (!open) {
@@ -3013,7 +3338,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!open) return undefined;
         var spec = parseQuery(query);
-        if (spec.mode === 'help' || spec.mode === 'calc') {
+        if (spec.mode === 'help' || spec.mode === 'calc' || spec.mode === 'file') {
           setCatalog({ items: [], hits: [], hitsFor: query.trim(), next: null, loading: false });
           return undefined;
         }
@@ -3048,6 +3373,68 @@ window.__ModuleLoader__.load({
           clearTimeout(timer);
         };
       }, [open, query, configState.contentDepth]);
+
+      // `/` file search: the Host walks one root. An empty needle lists the
+      // root's first level so Enter can walk down; typing ranks the whole tree.
+      // With no stored root the Host picks one (workspace, newest session, home)
+      // and we remember it, so the next open starts where the user left off.
+      useEffect(() => {
+        if (!open) return undefined;
+        var spec = parseQuery(query);
+        if (spec.mode !== 'file') return undefined;
+        var text = spec.text;
+        var stored = fileRoot;
+        var alive = true;
+        setFileState((prev) => Object.assign({}, prev, { root: prev.root || stored, loading: true, error: '', for: text }));
+
+        var fetchRoot = (root, allowFallback) => {
+          return getJson(fileSearchUrl(root, text)).then(
+            (payload) => {
+              if (!alive) return;
+              var nextRoot = payload && payload.root ? String(payload.root) : root;
+              if (nextRoot && nextRoot !== stored) {
+                writeFileRoot(nextRoot);
+                setFileRoot(nextRoot);
+              }
+              setFileState({
+                root: nextRoot || '',
+                items: payload && Array.isArray(payload.items) ? payload.items : [],
+                loading: false,
+                for: text,
+                truncated: !!(payload && payload.truncated),
+                error: '',
+              });
+            },
+            (error) => {
+              if (!alive) return;
+              // A remembered root can disappear (folder renamed, volume
+              // unmounted). Drop it and let the Host choose again once.
+              if (root && allowFallback) {
+                writeFileRoot('');
+                setFileRoot('');
+                fetchRoot('', false);
+                return;
+              }
+              setFileState({
+                root: root || '',
+                items: [],
+                loading: false,
+                for: text,
+                truncated: false,
+                error: String((error && error.message) || error),
+              });
+            },
+          );
+        };
+
+        var timer = setTimeout(() => {
+          fetchRoot(stored, true);
+        }, text ? 170 : 0);
+        return () => {
+          alive = false;
+          clearTimeout(timer);
+        };
+      }, [open, query, fileRoot]);
 
       // provider search: 180 ms after the last keystroke, cancelled on change
       useEffect(() => {
@@ -3144,6 +3531,7 @@ window.__ModuleLoader__.load({
           apply: applyConfig,
           next: catalogState.hitsFor === query.trim() ? catalogState.next : null,
           more: loadMore,
+          files: Object.assign({}, fileState, { root: fileState.root || fileRoot }),
         });
       } catch (error) {
         // Rendering this palette must never take the shell down: an unexpected
@@ -3250,6 +3638,10 @@ window.__ModuleLoader__.load({
           close();
           return;
         }
+        if (typeof result.fileRoot === 'string' && result.fileRoot) {
+          setFileRoot(result.fileRoot);
+          writeFileRoot(result.fileRoot);
+        }
         if (typeof result.query === 'string') {
           setQuery(result.query);
           setIndex(0);
@@ -3298,7 +3690,9 @@ window.__ModuleLoader__.load({
       function run(entry) {
         if (!entry || busy) return;
         if (typeof entry.toggle !== 'function' && typeof entry.run !== 'function') return;
-        remember(entry.key);
+        // File rows keep their own recency list (dsh-cmdk/files); feeding every
+        // path into the shared frecency table would drown the real commands.
+        if (entry.group !== 'file') remember(entry.key);
         var result;
         try {
           result = typeof entry.toggle === 'function' ? entry.toggle() : entry.run();
@@ -3501,7 +3895,7 @@ window.__ModuleLoader__.load({
             () => setIndex(position),
             position,
             t.hintActions,
-            query || lastNeedle,
+            lastNeedle || query,
           ),
         );
       });

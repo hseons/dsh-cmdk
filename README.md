@@ -23,6 +23,7 @@
 | 输入中文首字母 | `cj` → 「插件…」，`cjgc` → 「插件广场」 |
 | 输入消息内容 | 全文检索命中后带片段补进来，并标出是**第几条消息**；`→` 可看这条消息的上下文 |
 | 输入工作区名 | 直接切换工作区 |
+| `/` 开头 | 搜文件：最近文件、根目录浏览、递归路径匹配；`↵` 把 `@相对路径` 插进草稿 |
 | `深色` / `浅色` / `跟随系统` | 换主题 |
 | `中文` / `English` | 换界面语言 |
 
@@ -60,12 +61,25 @@
 | `>` | 命令与插件 | `> fork` |
 | `@` | 会话 | `@ 登录` |
 | `#` | 工作区 | `# dsh` |
-| `/` | 会话与工作区（路径视角） | `/ 微信插件` |
+| `/` | 文件与路径（工作区文件树、最近文件） | `/ api`、`/src/app.js` |
 | `=` | 计算器 | `= (128*9)/3` |
 | `?` | 帮助：键位、模式、已接入的 provider、使用统计 | `?` |
 | `> 设置` / `> 扩展` | 图形化配置 / provider 管理 | `> 扩展` |
 
 `=` 的结果回车即复制到剪贴板；`?` 里能看到每个 provider 贡献了多少命令。
+
+**`/` 文件模式**
+
+- 空查询先列**根目录第一层**（文件夹在前）+ 最近用过的文件；输入关键字后由 Host
+  递归索引整棵树，按「文件名精确 > 前缀 > 包含 > 路径包含 > 首字母子序列」排序，子序列要求字母紧凑，
+  `capi` 能找到 `GameKKCAPI`，不会把所有字母凑巧齐全的长文件名都算进来。
+- 文件行 `↵` 把 `@相对路径 ` 追加到当前草稿（属于哪个工作区就落到哪个工作区），
+  `→` 还有复制绝对/相对路径、在访达中显示并选中、打开所在文件夹。
+- 文件夹行 `↵` 直接进去，根目录第一行可当场切换（`pickDirectory`），路径记在
+  `localStorage` 的 `dsh-cmdk/file-root`，下次打开还是这里。
+- Host 侧有硬上限：深度 6（可调到 12）、15000 个文件、400ms、单目录 2000 项，
+  跳过 `node_modules` / `.git` / `dist` 等目录；超出会在底部标「结果已截断」。
+  根目录失联（改名、拔盘）时自动丢掉记忆并让 Host 重新选一个。
 
 **对一条会话按 `→`（或行尾的 `…`）可以**
 
@@ -286,7 +300,8 @@ window.__DSH_CMDK__?.unregister('my-plugin.open-docs');
 | GET | `/cmdk/workspaces` | 工作区清单 + 已归档会话 ID |
 | GET | `/cmdk/plugins` | 已安装插件（名称 / 版本 / 启用状态 / 目录） |
 | POST | `/cmdk/plugin` | `{ name, enabled }` 启用或禁用某个插件 |
-| POST | `/cmdk/open-profile` | 在访达/资源管理器打开目录（可选 `{path}`） |
+| GET | `/cmdk/files?root=&q=&limit=&depth=` | 文件索引（根目录一层 / 递归搜索，带 `rel`、`size`、`mtime`） |
+| POST | `/cmdk/open-profile` | 在访达/资源管理器打开目录（可选 `{path}`、`{reveal:true}` 选中文件） |
 
 ## 安装
 
@@ -313,6 +328,7 @@ npm run pack:check  # 看发布会带哪些文件
 | 文件 | 覆盖 |
 | --- | --- |
 | `tests/search.test.cjs` | 打分、模式前缀、查询解析、面板路由 |
+| `tests/files.test.cjs` | `/` 文件模式的根目录、最近文件、插入引用、过期结果、错误态 |
 | `tests/context.test.cjs` | 消息上下文面板、窗口档位 |
 | `tests/extensions.test.cjs` | provider 注册、扩展面板、启停 |
 | `tests/settings.test.cjs` | 设置行、开关、快捷键录制 |
@@ -331,7 +347,7 @@ CI 在 Node 20 / 22 / 24 上跑同样的三步：语法检查、测试、打包�
 package.json        # dsh.bundle.patch + dsh.client（platform web, immediately）
 cordis.patch.yml    # insert: dsh-cmdk
 CHANGELOG.md
-index.js            # Host：/cmdk/{info,sessions,message,workspaces,plugins,plugin,open-profile}
+index.js            # Host：/cmdk/{info,sessions,message,files,workspaces,plugins,plugin,open-profile}
 client.js           # Client：shell.overlay 面板 + sidebar.footer.action 按钮
 tests/              # 纯 Node 测试，无需浏览器与依赖
 docs/upgrade-plan.md # 0.4 → 1.0 的路线与验收标准

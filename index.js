@@ -8,6 +8,7 @@
  *   GET  /cmdk/info           → where this profile lives (home + profile dir)
  *   GET  /cmdk/sessions?q=    → full session catalogue + message-content hits
  *   GET  /cmdk/message        → the turns around one message (seq) of a session
+ *   GET  /cmdk/files?root=    → workspace file index for the `/` prefix
  *   POST /cmdk/open-profile   → reveal the profile directory in Finder/Explorer
  *   GET  /cmdk/plugins        → installed bundles (name, version, enabled, dir)
  *   POST /cmdk/plugin         → enable/disable one bundle via pluginManager
@@ -103,13 +104,22 @@ function refused(ctx, req, res) {
   return true;
 }
 
-function openInFileManager(dir) {
-  const [command, args] =
-    process.platform === 'darwin'
-      ? ['open', [dir]]
-      : process.platform === 'win32'
-        ? ['explorer', [dir]]
-        : ['xdg-open', [dir]];
+function openInFileManager(target, options) {
+  const reveal = !!(options && options.reveal);
+  let command;
+  let args;
+  if (process.platform === 'darwin') {
+    // `open -R` selects the file in its parent folder; without it `open` would
+    // launch whatever app owns the extension, which is not what "reveal" means.
+    command = 'open';
+    args = reveal ? ['-R', target] : [target];
+  } else if (process.platform === 'win32') {
+    command = 'explorer';
+    args = reveal ? ['/select,' + target] : [target];
+  } else {
+    command = 'xdg-open';
+    args = [reveal ? path.dirname(target) : target];
+  }
   return new Promise((resolve, reject) => {
     execFile(command, args, (error) => (error ? reject(error) : resolve()));
   });
@@ -351,6 +361,219 @@ function readWorkspaces() {
   };
 }
 
+/**
+ * The `/` prefix browses the filesystem, which the browser sandbox cannot see.
+ * The Host indexes one root at a time and hands back a flat ranked list.
+ * Every dimension is bounded — depth, files scanned, wall clock, per-directory
+ * entries — because a palette search must never stall the whole server.
+ */
+const FILE_SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  '.svn',
+  '.hg',
+  'dist',
+  'build',
+  'out',
+  '.next',
+  '.nuxt',
+  '.turbo',
+  '.cache',
+  'coverage',
+  '__pycache__',
+  '.venv',
+  'venv',
+  'target',
+  'vendor',
+  '.gradle',
+  '.idea',
+  'Pods',
+  'DerivedData',
+]);
+/** Dot-folders worth searching; every other dot-folder is noise. */
+const FILE_KEEP_HIDDEN = new Set(['.github', '.claude', '.cursor', '.dsh']);
+const FILE_DEFAULT_DEPTH = 6;
+const FILE_MAX_DEPTH = 12;
+const FILE_DEFAULT_LIMIT = 40;
+const FILE_MAX_LIMIT = 120;
+const FILE_MAX_SCAN = 15000;
+const FILE_MAX_MS = 400;
+const FILE_MAX_PER_DIR = 2000;
+const FILE_MAX_QUERY = 200;
+
+/** An absolute, existing, fully resolved directory — or '' for "not usable". */
+function normalizeRoot(value) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  const raw = value.trim();
+  if (!path.isAbsolute(raw)) return '';
+  try {
+    const real = fs.realpathSync(raw);
+    return fs.statSync(real).isDirectory() ? real : '';
+  } catch {
+    return '';
+  }
+}
+
+/** The root a bare `/` opens with: first workspace, newest session, home. */
+async function defaultFileRoot(ctx) {
+  const workspaces = readWorkspaces();
+  for (const workspace of workspaces.items) {
+    const root = normalizeRoot(workspace.path);
+    if (root) return root;
+  }
+  const catalog = await sessionCatalog(ctx).catch(() => []);
+  for (const entry of catalog) {
+    const root = normalizeRoot(entry.cwd);
+    if (root) return root;
+  }
+  return os.homedir();
+}
+
+/**
+ * Rank one path against the typed needle. Basename matches beat directory
+ * matches; a basename subsequence (`rdm` → `README.md`) is the last resort and
+ * still beats "no match".
+ */
+function fileScore(needle, name, rel) {
+  const base = name.toLowerCase();
+  if (base === needle) return 6;
+  if (base.indexOf(needle) === 0) return 5;
+  if (base.indexOf(needle) >= 0) return 4;
+  if (rel.indexOf(needle) >= 0) return 3;
+  let at = 0;
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < base.length && at < needle.length; i += 1) {
+    if (base.charAt(i) === needle.charAt(at)) {
+      if (first < 0) first = i;
+      last = i;
+      at += 1;
+    }
+  }
+  // A subsequence only counts while it stays compact: `capi` should find
+  // GameKKCAPI, not every file whose letters happen to appear in order.
+  if (at !== needle.length || last - first + 1 > needle.length * 2 + 2) return 0;
+  return 1;
+}
+
+function fileRow(root, full, name, kind, score) {
+  const rel = path.relative(root, full).split(path.sep).join('/');
+  let stat = null;
+  if (kind === 'file') {
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      stat = null;
+    }
+  }
+  const relDir = path.posix.dirname(rel);
+  return {
+    kind,
+    name,
+    path: full,
+    rel,
+    relDir: relDir === '.' ? '' : relDir,
+    size: stat ? stat.size : 0,
+    mtime: stat ? Math.round(stat.mtimeMs) : 0,
+    score: score || 0,
+  };
+}
+
+function readDirSafe(dir) {
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    return entries.length > FILE_MAX_PER_DIR ? entries.slice(0, FILE_MAX_PER_DIR) : entries;
+  } catch {
+    return [];
+  }
+}
+
+/** Kind of one directory entry; directory symlinks are skipped (cycle risk). */
+function entryKind(entry, full) {
+  if (entry.isDirectory()) return 'dir';
+  if (entry.isFile()) return 'file';
+  if (entry.isSymbolicLink()) {
+    try {
+      const stat = fs.statSync(full);
+      return stat.isFile() ? 'file' : 'skip';
+    } catch {
+      return 'skip';
+    }
+  }
+  return 'skip';
+}
+
+function scanFiles(root, options) {
+  const needle = String(options.query || '').toLowerCase();
+  const limit = options.limit;
+  const depth = options.depth;
+  const started = Date.now();
+  const items = [];
+  let scanned = 0;
+  let truncated = false;
+  let timedOut = false;
+
+  if (!needle) {
+    // Browsing: exactly one level, folders first, so Enter walks the tree
+    // instead of dumping ten thousand descendants.
+    for (const entry of readDirSafe(root)) {
+      const full = path.join(root, entry.name);
+      const kind = entryKind(entry, full);
+      if (kind === 'skip') continue;
+      if (kind === 'dir' && (FILE_SKIP_DIRS.has(entry.name) || (entry.name.charAt(0) === '.' && !FILE_KEEP_HIDDEN.has(entry.name)))) continue;
+      if (entry.name === '.DS_Store') continue;
+      items.push(fileRow(root, full, entry.name, kind, 0));
+    }
+    items.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'dir' ? -1 : 1));
+    return { items: items.slice(0, limit), truncated: items.length > limit, scanned: items.length, timedOut: false };
+  }
+
+  const queue = [{ dir: root, level: 0 }];
+  while (queue.length) {
+    if (scanned >= FILE_MAX_SCAN || Date.now() - started > FILE_MAX_MS) {
+      truncated = true;
+      timedOut = Date.now() - started > FILE_MAX_MS;
+      break;
+    }
+    const current = queue.shift();
+    const entries = readDirSafe(current.dir);
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      const full = path.join(current.dir, entry.name);
+      const kind = entryKind(entry, full);
+      if (kind === 'skip') continue;
+      const rel = path.relative(root, full).split(path.sep).join('/');
+      if (kind === 'dir') {
+        if (FILE_SKIP_DIRS.has(entry.name)) continue;
+        if (entry.name.charAt(0) === '.' && !FILE_KEEP_HIDDEN.has(entry.name)) continue;
+        if (current.level + 1 < depth) queue.push({ dir: full, level: current.level + 1 });
+      } else {
+        scanned += 1;
+      }
+      const score = fileScore(needle, entry.name, rel.toLowerCase());
+      if (score > 0) items.push(fileRow(root, full, entry.name, kind, score));
+      if (items.length >= limit * 4) {
+        truncated = true;
+        break;
+      }
+      if ((index & 31) === 31 && Date.now() - started > FILE_MAX_MS) {
+        truncated = true;
+        timedOut = true;
+        break;
+      }
+    }
+    if (truncated) break;
+  }
+
+  items.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.kind !== b.kind) return a.kind === 'file' ? -1 : 1;
+    if (a.rel.length !== b.rel.length) return a.rel.length - b.rel.length;
+    return b.mtime - a.mtime;
+  });
+  return { items: items.slice(0, limit), truncated, scanned, timedOut };
+}
+
 export function apply(ctx, config) {
   const server = ctx.get('webServer') || ctx.webServer;
   if (!server || typeof server.register !== 'function') {
@@ -504,6 +727,60 @@ export function apply(ctx, config) {
   disposers.push(
     server.register({
       kind: 'exact',
+      path: ROUTE + '/files',
+      handler: async (req, res) => {
+        if (refused(ctx, req, res)) return;
+        let url;
+        try {
+          url = new URL(req.url || ROUTE, 'http://localhost');
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'bad url' });
+          return;
+        }
+        const rawRoot = (url.searchParams.get('root') || '').trim();
+        const text = (url.searchParams.get('q') || '').trim().slice(0, FILE_MAX_QUERY);
+        const askedLimit = Number(url.searchParams.get('limit'));
+        const limit = Number.isFinite(askedLimit) && askedLimit > 0 ? Math.min(Math.trunc(askedLimit), FILE_MAX_LIMIT) : FILE_DEFAULT_LIMIT;
+        const askedDepth = Number(url.searchParams.get('depth'));
+        const depth = Number.isFinite(askedDepth) && askedDepth > 0 ? Math.min(Math.trunc(askedDepth), FILE_MAX_DEPTH) : FILE_DEFAULT_DEPTH;
+        const started = Date.now();
+
+        let root = normalizeRoot(rawRoot);
+        if (!root && rawRoot) {
+          sendJson(res, 400, { ok: false, error: 'root must be an existing absolute directory' });
+          return;
+        }
+        if (!root) {
+          try {
+            root = await defaultFileRoot(ctx);
+          } catch {
+            root = os.homedir();
+          }
+        }
+        try {
+          const found = scanFiles(root, { query: text, limit, depth });
+          sendJson(res, 200, {
+            ok: true,
+            root,
+            home: os.homedir(),
+            query: text,
+            depth,
+            items: found.items,
+            truncated: found.truncated,
+            timedOut: found.timedOut,
+            scanned: found.scanned,
+            took: Date.now() - started,
+          });
+        } catch (error) {
+          sendJson(res, 500, { ok: false, error: String((error && error.message) || error) });
+        }
+      },
+    }),
+  );
+
+  disposers.push(
+    server.register({
+      kind: 'exact',
       path: ROUTE + '/open-profile',
       handler: async (req, res) => {
         if (refused(ctx, req, res)) return;
@@ -513,18 +790,20 @@ export function apply(ctx, config) {
         }
         const raw = await readBody(req);
         let target = profileDir();
+        let reveal = false;
         if (raw) {
           try {
             const parsed = JSON.parse(raw);
             if (parsed && typeof parsed.path === 'string' && parsed.path.trim()) {
               target = parsed.path.trim();
             }
+            reveal = !!(parsed && parsed.reveal);
           } catch {
             /* fall back to the profile directory */
           }
         }
         try {
-          await openInFileManager(target);
+          await openInFileManager(target, { reveal });
           sendJson(res, 200, { ok: true, path: target });
         } catch (error) {
           sendJson(res, 500, { ok: false, error: String(error && error.message ? error.message : error) });
